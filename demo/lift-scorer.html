@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>举重 AI 打分 · 上传即测</title>
+<style>
+:root{
+  --bg:#0d1117; --panel:#161b22; --panel2:#1c2333; --line:#30363d;
+  --txt:#e6edf3; --sub:#8b949e; --acc:#58a6ff; --green:#3fb950; --orange:#d29922; --red:#f85149;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif;background:var(--bg);color:var(--txt);min-height:100vh;}
+.wrap{max-width:760px;margin:0 auto;padding:16px 14px 60px;}
+header{padding:18px 0 14px;border-bottom:1px solid var(--line);margin-bottom:16px;}
+header h1{margin:0 0 4px;font-size:24px;font-weight:800;letter-spacing:.5px;}
+header .sub{color:var(--sub);font-size:13px;}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:14px;}
+h2{font-size:15px;margin:0 0 12px;font-weight:700;}
+.btn{display:inline-block;background:var(--acc);color:#0d1117;border:0;border-radius:8px;padding:10px 18px;font-size:15px;font-weight:700;cursor:pointer;}
+.btn:disabled{background:#3d454d;color:#8b949e;cursor:not-allowed;}
+.btn.ghost{background:transparent;border:1px solid var(--line);color:var(--txt);}
+.upload{border:2px dashed var(--line);border-radius:12px;padding:28px 16px;text-align:center;cursor:pointer;transition:border-color .15s;}
+.upload:hover,.upload.drag{border-color:var(--acc);}
+.upload .t{font-size:16px;font-weight:700;margin-bottom:6px;}
+.upload .s{font-size:13px;color:var(--sub);}
+.sel{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;}
+.sel button{flex:1;min-width:120px;background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:14px;cursor:pointer;}
+.sel button.on{background:#12243c;border-color:var(--acc);color:var(--acc);font-weight:700;}
+.vbox{position:relative;}
+video{width:100%;max-height:60vh;border-radius:8px;background:#000;display:block;}
+canvas{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;}
+#prog{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin:12px 0 4px;display:none;}
+#prog i{display:block;height:100%;width:0;background:var(--acc);transition:width .15s;}
+#ptext{font-size:12px;color:var(--sub);}
+.hero{text-align:center;padding:8px 0 4px;}
+.hero .big{font-size:56px;font-weight:800;line-height:1;}
+.hero .lvl{display:inline-block;margin-top:8px;padding:3px 12px;border-radius:20px;font-size:14px;font-weight:700;}
+.lvl.g{background:rgba(63,185,80,.15);color:var(--green);}
+.lvl.o{background:rgba(210,153,34,.15);color:var(--orange);}
+.lvl.r{background:rgba(248,81,73,.15);color:var(--red);}
+table{width:100%;border-collapse:collapse;font-size:14px;}
+th,td{border-bottom:1px solid var(--line);padding:9px 6px;text-align:left;vertical-align:top;}
+th{color:var(--sub);font-weight:600;font-size:12px;}
+.sc{font-weight:700;color:var(--acc);}
+.un{color:var(--red);font-size:12px;}
+.met{color:var(--sub);font-size:12px;}
+.sug{font-size:13px;color:var(--sub);}
+.kf{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:10px;}
+.kf figure{margin:0;background:#0a0e14;border:1px solid var(--line);border-radius:8px;overflow:hidden;position:relative;}
+.kf canvas{position:static;width:100%;height:auto;pointer-events:auto;display:block;}
+.kf figcaption{font-size:11px;color:var(--sub);padding:4px 8px;}
+.suglist{list-style:none;margin:0;padding:0;}
+.suglist li{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:14px;line-height:1.6;}
+.suglist b{color:var(--acc);}
+.note{font-size:12px;color:var(--sub);line-height:1.7;}
+.hidden{display:none !important;}
+.err{background:rgba(248,81,73,.12);border:1px solid rgba(248,81,73,.4);color:#ffa198;border-radius:8px;padding:10px 12px;font-size:13px;margin-bottom:12px;}
+.loading{text-align:center;padding:30px 0;color:var(--sub);font-size:14px;}
+.spin{display:inline-block;width:22px;height:22px;border:3px solid var(--line);border-top-color:var(--acc);border-radius:50%;animation:sp .8s linear infinite;vertical-align:-5px;margin-right:8px;}
+@keyframes sp{to{transform:rotate(360deg)}}
+footer{color:var(--sub);font-size:12px;line-height:1.7;text-align:center;margin-top:20px;}
+@media (min-width:768px){ .kf{grid-template-columns:repeat(4,1fr);} }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>举重 AI 打分</h1>
+  <div class="sub">上传视频，浏览器内本地分析 · 十维规则打分 · 视频不出本机</div>
+</header>
+
+<div id="errbox" class="err hidden"></div>
+
+<!-- ===== 步骤1 上传 ===== -->
+<div class="card" id="stepUp">
+  <h2>① 上传你的试举视频</h2>
+  <div class="upload" id="drop">
+    <div class="t">点击选择或拖入视频</div>
+    <div class="s">侧面机位 · 全身入镜 · 只含一次完整动作（预备→发力→接铃→站起）</div>
+  </div>
+  <div class="sel" id="liftSel">
+    <button data-lift="clean" class="on">高翻 Clean</button>
+    <button data-lift="snatch">抓举 Snatch</button>
+  </div>
+  <input type="file" id="file" accept="video/*" class="hidden">
+</div>
+
+<!-- ===== 步骤2 预览/分析 ===== -->
+<div class="card hidden" id="stepAna">
+  <h2>② 预览与分析</h2>
+  <div class="vbox">
+    <video id="v" controls playsinline></video>
+    <canvas id="ov" width="540" height="960"></canvas>
+  </div>
+  <div style="display:flex;gap:10px;margin-top:12px;align-items:center;flex-wrap:wrap;">
+    <button class="btn ghost" id="toggleSkel">骨架叠加：开</button>
+    <button class="btn" id="go">开始分析</button>
+    <span style="font-size:12px;color:var(--sub);" id="vinfo"></span>
+  </div>
+  <div id="prog"><i></i></div>
+  <div id="ptext"></div>
+</div>
+
+<!-- ===== 步骤3 结果 ===== -->
+<div class="card hidden" id="stepRes">
+  <h2>③ 打分结果</h2>
+  <div class="hero">
+    <div class="big" id="heroScore">–</div>
+    <div style="font-size:13px;color:var(--sub);" id="heroSub"></div>
+    <span class="lvl" id="heroLvl"></span>
+  </div>
+  <div style="margin-top:14px;">
+    <table id="tbl"></table>
+  </div>
+</div>
+
+<div class="card hidden" id="stepKF">
+  <h2>④ 阶段关键帧</h2>
+  <div class="kf" id="kf"></div>
+</div>
+
+<div class="card hidden" id="stepSug">
+  <h2>⑤ 改进建议</h2>
+  <ul class="suglist" id="sug"></ul>
+  <div class="note" id="quality"></div>
+</div>
+
+<footer>
+  规则打分原型：MediaPipe 姿态估计 + 十维人工规则（示意性质，非竞赛级裁判标准）· 评分供训练参考，不替代专业教练意见<br>
+  分析全程在本机浏览器完成，视频不会上传到服务器
+</footer>
+</div>
+
+<script type="module">
+import {PoseLandmarker, FilesetResolver} from 'https://fastly.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
+/* ===== 算法模块（移植自 Python scoring.py / pose_extractor.py）===== */
+const W = {extension:.20,bar_path:.20,catch:.20,squat:.15,trunk:.15,flow:.10,double_pull:.05,timing:.05,foot:.05,sequence:.05};
+const COMP_CN={extension:"发力充分性",bar_path:"杠铃贴身",catch:"接铃锁定",squat:"下蹲深度",trunk:"躯干稳定",flow:"动作连贯",double_pull:"二次拉检测",timing:"发力时机",foot:"脚掌稳定",sequence:"伸展顺序"};
+
+function ang(a,b,c){ // 三点内角，b 顶点
+  const ba=[a[0]-b[0],a[1]-b[1]], bc=[c[0]-b[0],c[1]-b[1]];
+  const na=Math.hypot(ba[0],ba[1]), nc=Math.hypot(bc[0],bc[1]);
+  if(na<1e-6||nc<1e-6) return 180;
+  let cos=(ba[0]*bc[0]+ba[1]*bc[1])/(na*nc);
+  cos=Math.max(-1,Math.min(1,cos));
+  return Math.acos(cos)*180/Math.PI;
+}
+function trunkAngle(hip,sh){ return Math.atan2(Math.abs(sh[0]-hip[0]), Math.max(Math.abs(sh[1]-hip[1]),1e-6))*180/Math.PI; }
+function smooth(x,w=5){
+  if(w<2||x.length<w) return x.slice();
+  const out=[];
+  for(let i=0;i<x.length;i++){
+    let s=0,c=0;
+    for(let j=Math.max(0,i-((w-1)>>1));j<=Math.min(x.length-1,i+((w-1)>>1));j++){s+=x[j];c++;}
+    out.push(s/c);
+  }
+  return out;
+}
+function pctl(x,q){ // P95 分位
+  const a=x.slice().sort((m,n)=>m-n);
+  const i=(a.length-1)*q; const lo=Math.floor(i), hi=Math.ceil(i);
+  return lo===hi?a[lo]:a[lo]+(a[hi]-a[lo])*(i-lo);
+}
+function median(x){ if(!x.length) return NaN; const a=x.slice().sort((m,n)=>m-n); const m=Math.floor(a.length/2); return a.length%2?a[m]:(a[m-1]+a[m])/2; }
+function std(x){ const m=x.reduce((s,v)=>s+v,0)/x.length; return Math.sqrt(x.reduce((s,v)=>s+(v-m)*(v-m),0)/x.length); }
+function errScore(val,target,tol,maxErr,minScore=0){
+  if(val==null||isNaN(val)) return minScore;
+  const d=Math.abs(val-target);
+  if(d<=tol) return 100;
+  if(maxErr<=tol) return d<=tol?100:minScore;
+  return Math.max(minScore,100*Math.max(0,1-(d-tol)/(maxErr-tol)));
+}
+function computeFeatures(lm){
+  const p=i=>[lm[i].x,lm[i].y,lm[i].z,lm[i].visibility];
+  const hip=[(p(23)[0]+p(24)[0])/2,(p(23)[1]+p(24)[1])/2];
+  const sh=[(p(11)[0]+p(12)[0])/2,(p(11)[1]+p(12)[1])/2];
+  const ank=[(p(27)[0]+p(28)[0])/2,(p(27)[1]+p(28)[1])/2];
+  const leg=Math.max(ank[1]-hip[1],1e-3);
+  return {
+    hip:ang(sh,hip,p(25)), knee_l:ang(p(23),p(25),p(27)), knee_r:ang(p(24),p(26),p(28)),
+    elbow_l:ang(p(11),p(13),p(15)), elbow_r:ang(p(12),p(14),p(16)),
+    ankle_l:ang(p(25),p(27),p(31)), ankle_r:ang(p(26),p(28),p(32)),
+    trunk:trunkAngle(hip,sh),
+    wrist_h:ank[1]-(p(16)[1]+p(15)[1])/2,
+    leg:Math.max(ank[1]-hip[1],1e-3),
+    bar_h:(ank[1]-(p(16)[1]+p(15)[1])/2)/Math.max(ank[1]-hip[1],1e-3),
+    w_l_y:p(15)[1],w_r_y:p(16)[1],w_l_x:p(15)[0],w_r_x:p(16)[0],
+    ank_l_x:p(27)[0],ank_r_x:p(28)[0],
+    hip_y:hip[1],hip_x:hip[0],ank_y:ank[1],
+    vis:lm.reduce((s,q)=>s+q.visibility,0)/lm.length
+  };
+}
+function pickLoadSide(feats){
+  const rl=Math.max(...feats.map(f=>f.w_l_y))-Math.min(...feats.map(f=>f.w_l_y));
+  const rr=Math.max(...feats.map(f=>f.w_r_y))-Math.min(...feats.map(f=>f.w_r_y));
+  return rl>=rr?'l':'r';
+}
+function finalizeFeatures(feats,side,standLeg){
+  for(const f of feats){
+    f.knee=side==='l'?f.knee_l:f.knee_r;
+    f.elbow=side==='l'?f.elbow_l:f.elbow_r;
+    f.ankle=side==='l'?f.ankle_l:f.ankle_r;
+    f.ank_x=side==='l'?f.ank_l_x:f.ank_r_x;
+    const leg=standLeg||Math.max(f.ank_y-f.hip_y,1e-3);
+    f.bar_h=f.wrist_h/leg;
+    const wx=side==='l'?f.w_l_x:f.w_r_x;
+    f.bar_gap=Math.abs(wx-f.hip_x)/leg;
+    f.bar_over_base=Math.abs(wx-f.ank_x)/leg;
+  }
+  return feats;
+}
+function interpolate(lms){
+  const out=lms.slice();
+  const idxs=[]; lms.forEach((l,i)=>{ if(l) idxs.push(i); });
+  if(!idxs.length||idxs.length===lms.length) return out;
+  for(let i=0;i<out.length;i++){
+    if(out[i]) continue;
+    const before=idxs.filter(j=>j<i), after=idxs.filter(j=>j>i);
+    if(!before.length||!after.length) continue;
+    const ia=before[before.length-1], ib=after[0];
+    const t=(i-ia)/(ib-ia), pa=out[ia], pb=out[ib];
+    const interp=pa.map((v,k)=>v*(1-t)+pb[k]*t);
+    interp[3]=0.5;
+    out[i]={x:interp[0],y:interp[1],z:interp[2],visibility:interp[3]};
+  }
+  return out;
+}
+function detectPhases(barH,hip,knee,trunk,fps,catchWin=2.5,standWin=3.5,pullWin=3.0,maxBarh=2.5){
+  const n=barH.length; if(n<8) return null;
+  const bh=smooth(barH.map(v=>Math.max(0,Math.min(maxBarh,v))),5);
+  const hp=smooth(hip,5);
+  let iMin=0; for(let i=1;i<n;i++) if(bh[i]<bh[iMin]) iMin=i;
+  const iMaxUb=Math.min(n,iMin+Math.round(pullWin*fps));
+  if(iMaxUb-iMin<3) return null;
+  let iMax=iMin; for(let i=iMin;i<iMaxUb;i++) if(bh[i]>bh[iMax]) iMax=i;
+  const setupS=Math.max(0,(iMin-2)/fps);
+  let iExt=iMin; for(let i=iMin;i<=iMax;i++) if(hp[i]>hp[iExt]) iExt=i;
+  const extS=iExt/fps;
+  const kn=smooth(knee,5);
+  let iCatch=null;
+  for(let i=iMax;i<Math.min(n,iMax+Math.round(catchWin*fps));i++){
+    if(kn[i]<135&&(iCatch===null||kn[i]<kn[iCatch])) iCatch=i;
+  }
+  if(iCatch===null) iCatch=iMax;
+  const catchS=iCatch/fps;
+  const tr=smooth(trunk,5);
+  let iStand=null;
+  for(let i=iCatch;i<Math.min(n,iCatch+Math.round(standWin*fps));i++){
+    if(tr[i]<15){ iStand=i; break; }
+  }
+  if(iStand===null) iStand=Math.min(n-1,iCatch+Math.round(standWin*fps));
+  return {setup:setupS,ext:extS,catch:catchS,stand:iStand/fps};
+}
+function emaFeatures(feats,alpha=.45){
+  if(!feats.length) return feats;
+  const fields=['hip','knee_l','knee_r','elbow_l','elbow_r','trunk','bar_h','wrist_h','ank_l_x','ank_r_x','hip_x','hip_y','ank_y','ank_x','knee','elbow','bar_gap','bar_over_base'];
+  const keys=[...new Set([...fields,...Object.keys(feats[0])])];
+  const prev={}; keys.forEach(k=>prev[k]=null);
+  return feats.map(f=>{
+    const nf=Object.assign({},f);
+    for(const k of keys){
+      const v=f[k];
+      if(v==null||typeof v==='boolean'||typeof v!=='number') continue;
+      nf[k]=prev[k]==null?v:alpha*v+(1-alpha)*prev[k];
+      prev[k]=nf[k];
+    }
+    return nf;
+  });
+}
+function sliceFeats(feats,t0,t1,fps,minDur=.6){
+  const a=Math.max(0,Math.round(t0*fps));
+  let b=Math.max(a+1,Math.round(t1*fps));
+  if(b-a<Math.round(minDur*fps)) b=Math.min(feats.length,a+Math.round(minDur*fps));
+  return feats.slice(a,b);
+}
+function flowScore(feats){
+  const bh=feats.map(f=>f.bar_h);
+  if(bh.length<4) return 60;
+  const sm=smooth(bh,3);
+  const d=[]; for(let i=1;i<sm.length;i++) d.push(sm[i]-sm[i-1]);
+  const rms=Math.sqrt(d.reduce((s,v)=>s+v*v,0)/d.length);
+  const rng=Math.max(...bh)-Math.min(...bh);
+  return Math.max(0,Math.min(100,100-120*Math.max(0,Math.min(.8,rms/(rng+1e-3)))));
+}
+function techScores(feats,phases,fps){
+  const n=feats.length, out={};
+  const bh=smooth(feats.map(f=>Math.max(0,Math.min(2.5,f.bar_h))),5);
+  const a=Math.round(phases.setup*fps), b=Math.min(n,Math.round(phases.catch*fps));
+  const rise=bh.slice(a,b+1);
+  if(rise.length>=6){
+    const v=[]; for(let i=1;i<rise.length;i++) v.push(rise[i]-rise[i-1]);
+    out.double_pull=errScore(Math.min(...v),0,.02,.10);
+    out._v_min=Math.min(...v);
+    let iV=0; for(let i=1;i<v.length;i++) if(v[i]>v[iV]) iV=i;
+    const dt=Math.abs((a+iV)/fps-phases.ext);
+    out.timing=errScore(dt,0,.2,.8);
+    out._dt=dt;
+  }
+  if(n>=8){
+    const ank=feats.map(f=>f.ank_x);
+    const leg=pctl(feats.map(f=>f.leg),.95);
+    const sd=std(ank)/Math.max(leg,1e-3);
+    out.foot=errScore(sd,0,.04,.15);
+    out._foot_std=sd;
+  }
+  const tLo=Math.max(phases.setup,phases.ext-.4), tHi=Math.min(phases.stand,phases.ext+.4);
+  const win=sliceFeats(feats,tLo,tHi,fps);
+  if(win.length>=4){
+    const t90=vals=>{ const m=Math.max(...vals); if(m<=0) return 0; const thr=.9*m;
+      for(let i=0;i<vals.length;i++) if(vals[i]>=thr) return i/fps; return vals.length/fps; };
+    const dt=t90(win.map(f=>f.hip))-t90(win.map(f=>f.knee));
+    out.sequence=errScore(dt,0,.08,.4);
+    out._dt_hipknee=dt;
+  }
+  return out;
+}
+function scoreClean(feats,phases,fps){
+  const extWin=sliceFeats(feats,phases.ext,phases.catch,fps);
+  const catchWin=sliceFeats(feats,phases.catch,phases.stand,fps);
+  const liftWin=sliceFeats(feats,phases.ext,phases.stand+1.0,fps);
+  if(!extWin.length||!catchWin.length) return null;
+  const extHip=Math.max(...extWin.map(f=>f.hip));
+  const sExt=errScore(extHip,170,10,45);
+  const pull=feats.slice(Math.round(phases.setup*fps),Math.round(phases.ext*fps)+Math.round(.5*fps)).filter(f=>f.bar_h>=.35&&f.bar_h<=.75);
+  const barGap=pull.length?median(pull.map(f=>f.bar_gap)):median(extWin.map(f=>f.bar_gap));
+  const sBar=errScore(barGap,.15,.10,.6);
+  const catchKnee=Math.min(...catchWin.map(f=>f.knee));
+  const sSquat=errScore(catchKnee,90,25,70);
+  const rackGap=median(catchWin.map(f=>f.bar_gap));
+  const rackTrunk=median(catchWin.map(f=>f.trunk));
+  const sRack=.6*errScore(rackGap,.15,.10,.5)+.4*errScore(rackTrunk,5,10,45);
+  const trunkMax=pctl(liftWin.map(f=>f.trunk),.95);
+  const sTrunk=errScore(trunkMax,5,10,45);
+  const sFlow=flowScore(feats);
+  return {extension:sExt,bar_path:sBar,catch:sRack,squat:sSquat,trunk:sTrunk,flow:sFlow,
+    _ext_hip:extHip,_bar_gap:barGap,_catch_knee:catchKnee,_trunk_max:trunkMax};
+}
+function scoreSnatch(feats,phases,fps){
+  const extWin=sliceFeats(feats,phases.ext,phases.catch,fps);
+  const catchWin=sliceFeats(feats,phases.catch,phases.stand,fps);
+  const liftWin=sliceFeats(feats,phases.ext,phases.stand+1.0,fps);
+  if(!extWin.length||!catchWin.length) return null;
+  const extHip=Math.max(...extWin.map(f=>f.hip));
+  const sExt=errScore(extHip,170,10,45);
+  const pull=feats.slice(Math.round(phases.setup*fps),Math.round(phases.ext*fps)+Math.round(.5*fps)).filter(f=>f.bar_h>=.35&&f.bar_h<=.75);
+  const barGap=pull.length?median(pull.map(f=>f.bar_gap)):median(extWin.map(f=>f.bar_gap));
+  const sBar=errScore(barGap,.15,.10,.6);
+  const catchKnee=Math.min(...catchWin.map(f=>f.knee));
+  const sSquat=errScore(catchKnee,70,20,70);
+  const elbow=median(catchWin.map(f=>f.elbow));
+  const bhC=median(catchWin.map(f=>f.bar_h));
+  const baseC=median(catchWin.map(f=>f.bar_over_base));
+  const lock=.5*errScore(elbow,175,10,45)+.3*errScore(bhC,1.2,.2,.6)+.2*errScore(baseC,.15,.10,.5);
+  const trunkMax=pctl(liftWin.map(f=>f.trunk),.95);
+  const sTrunk=errScore(trunkMax,5,10,45);
+  const sFlow=flowScore(feats);
+  return {extension:sExt,bar_path:sBar,catch:lock,squat:sSquat,trunk:sTrunk,flow:sFlow,
+    _ext_hip:extHip,_bar_gap:barGap,_catch_knee:catchKnee,_trunk_max:trunkMax};
+}
+function computeScore(comps,weights){
+  const w=weights||W;
+  const keys=Object.keys(w).filter(k=>k in comps);
+  if(!keys.length) return {score:0,grade:'待改进'};
+  let tot=0,ww=0; keys.forEach(k=>{tot+=comps[k]*w[k];ww+=w[k];});
+  tot/=ww;
+  const grade=tot>=85?'优秀':tot>=70?'良好':tot>=55?'一般':'待改进';
+  return {score:Math.round(tot*10)/10,grade};
+}
+const SUG={
+ extension:[[80,'发力阶段髋角伸展不足（%s°，目标 ≥160°）：顶髋要充分，想象用爆发力把杠铃"顶"起来，而不是用手臂硬拉。'],[60,'发力严重不足：下蹲预备时收紧背、肩在杠前，用腿和髋发力蹬伸，杠铃贴腿上升。']],
+ bar_path:[[80,'杠铃离身体过远（水平距离 %s）：拉铃全程让杠铃贴住腿，发力后贴住躯干，想象杠铃沿着身体"擦"上去。'],[60,'杠铃轨迹严重外飘：第一拉保持杠铃贴近小腿，第二拉用髋顶杠，肘部向两侧上带。']],
+ catch:[[80,'接铃锁定不稳定（%s）：接铃瞬间主动锁肩、收紧核心，杠铃保持在支撑面正上方后再站起。'],[60,'接铃明显晃动/未锁定：先练高抓或架空位锁定，接铃时快速翻肘、杠铃落在锁骨前架。']],
+ squat:[[80,'下蹲深度不够（膝角 %s°）：接铃时要敢往下蹲，用深蹲接铃降低重心，别用半蹲硬撑。'],[60,'下蹲过浅或重心偏前：加强接铃深蹲练习，保持脚跟压地、膝盖朝脚尖方向。']],
+ trunk:[[80,'躯干晃动明显（最大倾角 %s°）：全程收紧核心，杠铃上升时保持躯干稳定，别前后晃。'],[60,'躯干严重前倾/后仰：降低重量练动作模式，先保证脊柱中立再加重。']],
+ flow:[[80,'动作连贯性一般（%s）：杠铃速度有停顿，发力要一气呵成，减少"先拉后蹬"的脱节。'],[60,'动作脱节明显：用悬垂抓/悬垂翻练节奏，第一拉匀速、第二拉爆发，连贯过渡。']],
+ double_pull:[[80,'杠铃上升有停顿/回落（最低速度 %s）：拉铃要一气呵成——一拉匀拉过膝、二拉爆发，杠铃全程不减速不停顿。'],[60,'二次拉明显：杠铃上升中断又再次加速，先降重量练高拉节奏，杠铃贴腿连续上升。']],
+ timing:[[80,'杠铃加速时机不准（速度峰值在上升段 %s%% 处，目标约 60%%）：第一拉保持匀速别抢速，过膝后再爆发顶髋。'],[60,'发力时机严重偏差：一拉就全力加速会失去三关节顺序，用悬垂翻/悬垂抓练习控制发力节奏。']],
+ foot:[[80,'脚下移动明显（踝位波动 %s）：全程保持站距稳定，杠铃上升与接铃阶段脚都不要挪位。'],[60,'脚下大幅移动：先练稳定站姿下的高翻/高抓，脚踩实地面，重心保持在足中。']],
+ sequence:[[80,'伸展顺序不连贯（%s）：发力应先伸髋、再伸膝、最后蹬踝（近端到远端），形成链条式力量传导。'],[60,'伸展顺序混乱：用轻重量体会"先顶髋、再伸膝、最后蹬地"的三段节奏，髋发力先于膝踝。']],
+};
+function buildSuggestions(comps,metrics){
+  const out=[];
+  for(const key of Object.keys(SUG)){
+    const sc=comps[key]; if(sc==null) continue;
+    for(const [thr,tmpl] of SUG[key]){
+      if(sc<thr){
+        const val=metrics[key]||'';
+        out.push({key,score:sc,text:val?tmpl.replace(/%s/g,()=>val):tmpl.split('：')[0]+'。'});
+        break;
+      }
+    }
+  }
+  return out;
+}
+/* ===== 页面逻辑 ===== */
+const $=id=>document.getElementById(id);
+const state={lift:'clean',file:null,url:null,lms:[],ts:[],landmarker:null,skel:true,analyzing:false};
+
+/* ===== MediaPipe 初始化与逐帧分析 ===== */
+function nearestIndex(t){
+  if(!state.ts||!state.ts.length) return -1;
+  let best=0,bd=1e9;
+  for(let i=0;i<state.ts.length;i++){ const d=Math.abs(state.ts[i]-t); if(d<bd){bd=d;best=i;} }
+  return best;
+}
+async function initLandmarker(){
+  if(state.landmarker) return true;
+  $('ptext').textContent='正在加载姿态模型（首次约 20-40 秒，之后秒开）…';
+  $('prog').style.display='block';
+  try{
+    const fileset=await FilesetResolver.forVisionTasks('https://fastly.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+    const modelAbs=new URL('models/pose_landmarker_full.task',location.href).href;
+    $('ptext').textContent='正在加载姿态模型（CPU 模式，首次约 20-40 秒）…';
+    try{
+      state.landmarker=await PoseLandmarker.createFromOptions(fileset,{
+        baseOptions:{modelAssetPath:modelAbs,delegate:'CPU'},
+        runningMode:'VIDEO',numPoses:2,
+        minPoseDetectionConfidence:.4,minTrackingConfidence:.4
+      });
+    }catch(e){
+      // 同源模型不可用（本地 file:// 打开等）时回退到 jsDelivr 托管副本
+      state.landmarker=await PoseLandmarker.createFromOptions(fileset,{
+        baseOptions:{modelAssetPath:'https://cdn.jsdelivr.net/gh/mayuehappy/ai_weightlift_score@main/demo/models/pose_landmarker_full.task',delegate:'CPU'},
+        runningMode:'VIDEO',numPoses:2,
+        minPoseDetectionConfidence:.4,minTrackingConfidence:.4
+      });
+    }
+    $('ptext').textContent='模型就绪，可开始分析。';
+    return true;
+  }catch(err){
+    showErr('姿态模型加载失败：'+err.message+'（请检查网络，需能访问 jsDelivr CDN）');
+    $('ptext').textContent='';
+    return false;
+  }
+}
+function webglOk(){
+  try{ const c=document.createElement('canvas'); return !!(c.getContext('webgl2')||c.getContext('webgl')); }
+  catch(e){ return false; }
+}
+function analyzeFrames(){
+  const v=$('v');
+  return new Promise((resolve,reject)=>{
+    const lms=[],ts=[];
+    v.pause();
+    try{ v.currentTime=0; }catch(e){}
+    let prevHip=null,first=true;
+    const tick=async ()=>{
+      if(!state.landmarker){ reject(new Error('模型未就绪')); return; }
+      let poses=[];
+      try{ poses=(state.landmarker.detectForVideo(v,performance.now()).poseLandmarks)||[]; }
+      catch(e){ $('ptext').textContent='单帧检测异常:'+e.message; }
+      let chosen=null;
+      if(poses.length===1) chosen=poses[0];
+      else if(poses.length>1){
+        if(first||prevHip===null) chosen=poses.reduce((m,p)=>size(p)>size(m)?p:m);
+        else chosen=poses.reduce((m,p)=>distHip(p,prevHip)<distHip(m,prevHip)?p:m);
+      }
+      first=false;
+      if(chosen){ prevHip=[(chosen[23].x+chosen[24].x)/2,(chosen[23].y+chosen[24].y)/2]; }
+      ts.push(v.currentTime); lms.push(chosen);
+      const pct=v.duration?Math.min(1,v.currentTime/v.duration):0;
+      $('prog').querySelector('i').style.width=(pct*100)+'%';
+      $('ptext').textContent=`分析中 ${(pct*100).toFixed(0)}% · ${lms.length} 帧 · 姿态 ${lms.filter(Boolean).length} 帧`;
+      if(v.ended||(v.duration&&v.currentTime>=v.duration-.08)){ finish(); return; }
+      if(v.paused&&!v.ended){ finish(); return; }
+      v.requestVideoFrameCallback(tick);
+    };
+    const finish=()=>{ v.pause(); resolve({lms,ts}); };
+    v.addEventListener('ended',finish,{once:true});
+    v.addEventListener('pause',finish,{once:true});
+    v.requestVideoFrameCallback(tick);
+    v.play().then(()=>{}).catch(e=>{ $('ptext').textContent='自动播放被拦截（'+e.message+'），改用逐帧采集'; seekCollect().then(resolve).catch(reject); });
+    setTimeout(()=>{ if(v.paused&&!v.ended){ /* 播放未启动则走 seek 采集 */ seekCollect().then(resolve).catch(reject); } },2500);
+  });
+  function seekCollect(){
+    const v=$('v');
+    const oc=document.createElement('canvas');
+    oc.width=v.videoWidth||720; oc.height=v.videoHeight||1280;
+    const octx=oc.getContext('2d',{willReadFrequently:true});
+    const total=Math.min(600,Math.max(30,Math.round(v.duration*(state.useGPU?30:15))));
+    return new Promise(res2=>{
+      v.pause();
+      const out={lms:[],ts:[]};
+      let i=0,errs=0,lastErr='';
+      const step=()=>{
+        if(i>=total){ v.pause(); res2(out); return; }
+        const t=i*(v.duration/total);
+        const h=()=>{
+          v.removeEventListener('seeked',h);
+          let poses=[];
+          try{
+            octx.drawImage(v,0,0,oc.width,oc.height);
+            poses=(state.landmarker.detectForVideo(oc,performance.now()).poseLandmarks)||[];
+          }catch(e){ errs++; lastErr=e.message; }
+          let chosen=null;
+          if(poses.length===1) chosen=poses[0];
+          else if(poses.length>1){
+            if(prevHip===null) chosen=poses.reduce((m,p)=>size(p)>size(m)?p:m);
+            else chosen=poses.reduce((m,p)=>distHip(p,prevHip)<distHip(m,prevHip)?p:m);
+          }
+          if(chosen) prevHip=[(chosen[23].x+chosen[24].x)/2,(chosen[23].y+chosen[24].y)/2];
+          out.ts.push(v.currentTime); out.lms.push(chosen);
+          $('prog').querySelector('i').style.width=((i+1)/total*100)+'%';
+          if(errs){
+            if(/activeTexture|WebGL|webgl/i.test(lastErr)){
+              $('ptext').textContent='检测异常：当前浏览器无 GPU/WebGL 硬件加速，无法运行姿态分析。请更换 Chrome/Edge/Safari 或开启硬件加速后重试。';
+            }else{
+              $('ptext').textContent='检测异常: '+lastErr;
+            }
+          }
+          else $('ptext').textContent=`逐帧采集 ${i+1}/${total} · 姿态 ${out.lms.filter(Boolean).length} 帧`;
+          i++; step();
+        };
+        v.addEventListener('seeked',h);
+        v.currentTime=t;
+      };
+      step();
+    });
+  }
+}
+function size(p){
+  const hip=[(p[23].x+p[24].x)/2,(p[23].y+p[24].y)/2];
+  const ank=[(p[27].x+p[28].x)/2,(p[27].y+p[28].y)/2];
+  return Math.hypot(hip[0]-ank[0],hip[1]-ank[1]);
+}
+function distHip(p,h){ return Math.hypot((p[23].x+p[24].x)/2-h[0],(p[23].y+p[24].y)/2-h[1]); }
+
+/* ===== 主分析管线（对齐 Python analyze.py）===== */
+function computePipeline(lmsRaw,fps,dur){
+  // 1) 插值缺失帧
+  const interp=interpolate(lmsRaw);
+  // 2) 特征（有效帧 vis>0.4）
+  let feats=interp.map(lm=>{ if(!lm) return null; const f=computeFeatures(lm); return (f&&f.vis>0.4)?f:null; });
+  const valid=[]; feats.forEach((f,i)=>{ if(f) valid.push(i); });
+  if(valid.length<8) return {err:'有效姿态帧太少（<8）。请检查构图：需全身入镜、侧面视角、光线充足。'};
+  const side=pickLoadSide(valid.map(i=>feats[i]));
+  let fv=valid.map(i=>feats[i]);
+  const standLeg=pctl(fv.map(f=>f.leg),.95);
+  fv=finalizeFeatures(fv,side,standLeg);
+  const phases=detectPhases(fv.map(f=>f.bar_h),fv.map(f=>f.hip),fv.map(f=>f.knee),fv.map(f=>f.trunk),fps);
+  if(!phases) return {err:'未识别出完整"低位→高位"试举结构。窗口需只含一次完整动作（预备→发力→接铃→站起），且画面不要前后晃动。'};
+  const fvRaw=fv, fvSm=emaFeatures(fv);
+  const scorer=state.lift==='snatch'?scoreSnatch:scoreClean;
+  const comps=scorer(fvSm,phases,fps);
+  if(!comps) return {err:'阶段窗口不足以计算分项。请确保窗口内包含一次完整试举动作。'};
+  Object.assign(comps,techScores(fvRaw,phases,fps));
+  // 3) 可靠性剔除
+  const pull=fvRaw.slice(Math.round(phases.setup*fps),Math.round(phases.ext*fps)+Math.round(.5*fps)).filter(f=>f.bar_h>=.35&&f.bar_h<=.75);
+  const nPull=pull.length;
+  const pullMed=pull.length?median(pull.map(f=>f.bar_gap)):99;
+  const barPathLimited=nPull<3||pullMed>0.6;
+  const catchF=fvRaw.slice(Math.round(phases.catch*fps),Math.round(phases.stand*fps)+Math.round(.6*fps));
+  const catchGap=catchF.length?median(catchF.map(f=>f.bar_gap)):99;
+  const catchLimited=catchGap>0.6;
+  const footStd=comps._foot_std||0;
+  const footLimited=footStd>0.15;
+  const techKeys=['double_pull','timing','foot','sequence'];
+  const techMissing=techKeys.filter(k=>!(k in comps));
+  let total,grade;
+  const unreliable=[];
+  if(barPathLimited) unreliable.push('bar_path');
+  if(catchLimited) unreliable.push('catch');
+  if(footLimited) unreliable.push('foot');
+  ({score:total,grade}=computeScore(comps));
+  if(unreliable.length){
+    const w={}; Object.keys(W).forEach(k=>{ if(!unreliable.includes(k)) w[k]=W[k]; });
+    ({score:total,grade}=computeScore(comps,w));
+  }
+  // 4) 指标与建议
+  const metrics={
+    extension:comps._ext_hip.toFixed(0)+'°',
+    bar_path:comps._bar_gap.toFixed(2),
+    squat:comps._catch_knee.toFixed(0)+'°',
+    trunk:comps._trunk_max.toFixed(0)+'°',
+    catch:'见锁定分',
+    flow:comps.flow.toFixed(0),
+    double_pull:(comps._v_min!=null?comps._v_min.toFixed(3):''),
+    timing:(comps._dt!=null?comps._dt.toFixed(2):''),
+    foot:(comps._foot_std!=null?comps._foot_std.toFixed(3):''),
+  };
+  if('sequence' in comps){
+    const dt=comps._dt_hipknee;
+    metrics.sequence=dt<=0.08?'髋先于膝':(dt>0.4?`膝先于髋 ${dt.toFixed(1)}s`:`髋晚于膝 ${dt.toFixed(1)}s`);
+  }
+  const sugMetrics={}; Object.keys(metrics).forEach(k=>{ const v=metrics[k]; sugMetrics[k]=typeof v==='string'&&v.endsWith('°')?v.slice(0,-1):v; });
+  const sug=buildSuggestions(comps,sugMetrics);
+  // 5) 组装 components
+  const occlSug='腕点被躯干遮挡/跟丢（背后机位或发力过快），该项暂不计入总分';
+  const components={};
+  const relFlags={bar_path:!barPathLimited,catch:!catchLimited,foot:!footLimited};
+  for(const k of Object.keys(COMP_CN)){
+    if(!(k in comps)) continue;
+    const rel=relFlags[k]===undefined?true:relFlags[k];
+    let suggestion=null;
+    if(k==='bar_path'&&barPathLimited) suggestion=occlSug;
+    else if(k==='catch'&&catchLimited) suggestion=occlSug;
+    else if(k==='foot'&&footLimited) suggestion='踝点水平漂移明显（机位晃动或挪步），侧机位无法评估站姿稳定';
+    else { const hit=sug.find(s=>s.key===k); suggestion=hit?hit.text:null; }
+    components[k]={score:Math.round(comps[k]*10)/10,metric:metrics[k]||'',reliable:rel,suggestion};
+  }
+  const notes=[];
+  if(barPathLimited) notes.push('杠铃贴身：过膝段有效样本不足（发力过快/腕点抖动），已排除出总分');
+  if(catchLimited) notes.push('接铃锁定：接铃窗口腕点不可信（背后机位或遮挡），已排除出总分');
+  if(techMissing.length) notes.push('技术细节维度（'+techMissing.join('、')+'）：样本不足未参与评分');
+  if(footLimited) notes.push('站姿稳定：踝点水平漂移明显（相机晃动或大幅挪步），侧机位无法分离原因，已排除出总分');
+  if(!notes.length) notes.push('全部有效分项正常参与评分。');
+  return {total,grade,components,phases,notes,side,fps,dur,lift:state.lift,
+    hero:`${state.lift==='clean'?'高翻':'抓举'} · ${valid.length} 有效帧 · ${fps.toFixed(1)}fps`};
+}
+
+/* ===== 结果渲染 ===== */
+function renderResult(r){
+  const lvlCls=r.grade==='优秀'?'g':r.grade==='良好'?'o':'r';
+  $('heroScore').textContent=r.total.toFixed(1);
+  $('heroSub').textContent=r.hero;
+  const lv=$('heroLvl'); lv.textContent=r.grade; lv.className='lvl '+lvlCls;
+  // 表格
+  let html='<tr><th>维度</th><th>得分</th><th>实测</th><th>说明</th></tr>';
+  for(const k of Object.keys(COMP_CN)){
+    const c=r.components[k]; if(!c) continue;
+    const un=c.reliable?'':`<div class="un">已剔除</div>`;
+    const met=c.metric?`<div class="met">${c.metric}</div>`:'';
+    const sugTxt=c.suggestion?`<div class="sug">${c.suggestion}</div>`:'';
+    html+=`<tr><td>${COMP_CN[k]}</td><td class="sc">${c.reliable?c.score.toFixed(1):'–'}</td><td>${met}${un}</td><td>${sugTxt}</td></tr>`;
+  }
+  $('tbl').innerHTML=html;
+  // 阶段
+  $('stepRes').classList.remove('hidden');
+  $('stepKF').classList.remove('hidden');
+  // 关键帧
+  renderKeyFrames(r);
+  // 建议
+  const sugHtml=r.components && Object.values(r.components).filter(c=>c.suggestion&&c.reliable).slice(0,8)
+    .map(c=>`<li><b>${COMP_CN[Object.keys(r.components).find(k=>r.components[k]===c)]} ${c.score.toFixed(0)}分</b> · ${c.suggestion}</li>`).join('');
+  $('sug').innerHTML=sugHtml||'<li>各项指标良好，继续保持当前技术动作。</li>';
+  $('quality').textContent='可靠性与剔除说明：'+r.notes.join('；')+'。评分供训练参考，非竞赛裁判标准。';
+  $('stepSug').classList.remove('hidden');
+  $('stepRes').scrollIntoView({behavior:'smooth'});
+}
+async function renderKeyFrames(r){
+  const v=$('v');
+  const names={setup:'预备',ext:'发力',catch:'接铃',stand:'站起'};
+  $('kf').innerHTML=Object.keys(names).map(k=>`<figure><canvas></canvas><figcaption>${names[k]} @ ${r.phases[k].toFixed(1)}s</figcaption></figure>`).join('');
+  const idxs={};
+  state.ts.forEach((t,i)=>{ for(const k of Object.keys(names)){ if(idxs[k]===undefined||Math.abs(t-r.phases[k])<Math.abs(state.ts[idxs[k]]-r.phases[k])) idxs[k]=i; } });
+  for(const k of Object.keys(names)){
+    const cv=$('kf').querySelectorAll('canvas')[Object.keys(names).indexOf(k)];
+    await seekDraw(cv,r.phases[k],state.lms[idxs[k]]);
+  }
+  v.pause(); v.currentTime=r.phases.catch||0;
+}
+function seekDraw(canvas,time,lm){
+  const v=$('v');
+  return new Promise(res=>{
+    const h=()=>{
+      v.removeEventListener('seeked',h);
+      const ctx=canvas.getContext('2d');
+      canvas.width=v.videoWidth||640; canvas.height=v.videoHeight||480;
+      ctx.drawImage(v,0,0,canvas.width,canvas.height);
+      if(lm){ drawSkeleton(ctx,[lm],0,0,canvas.width,canvas.height,true); }
+      res();
+    };
+    v.addEventListener('seeked',h);
+    try{ v.currentTime=time; }catch(e){ res(); }
+  });
+}
+$('go').addEventListener('click',async ()=>{
+  if(state.analyzing) return;
+  state.analyzing=true; $('go').disabled=true; $('go').textContent='分析中…'; clearErr();
+  const ok=await initLandmarker();
+  if(!ok){ state.analyzing=false; $('go').disabled=false; $('go').textContent='开始分析'; return; }
+  try{
+    const {lms,ts}=await analyzeFrames();
+    state.lms=lms; state.ts=ts;
+    const validCnt=lms.filter(Boolean).length;
+    if(validCnt<4){
+      showErr('未能从视频中检测到人体姿态（'+validCnt+' 帧）。可能原因：① 视频编码不被浏览器支持（HEVC/H.265 请转 H.264）；② 画面中无人或人物过小；③ 光线过暗。');
+      state.analyzing=false; $('go').disabled=false; $('go').textContent='开始分析';
+      $('prog').querySelector('i').style.width='0%'; return;
+    }
+    const fps=lms.length/Math.max(.1,$('v').duration);
+    const r=computePipeline(lms,fps,$('v').duration);
+    if(r.err){ showErr(r.err); }
+    else renderResult(r);
+  }catch(e){ showErr('分析失败：'+e.message); }
+  state.analyzing=false; $('go').disabled=false; $('go').textContent='开始分析';
+  $('prog').querySelector('i').style.width='0%';
+});
+
+/* 测试入口：?v=<视频URL> 自动加载并分析（不影响正常使用） */
+(function(){
+  const p=new URLSearchParams(location.search);
+  const v=p.get('v');
+  if(!v) return;
+  fetch(v).then(r=>r.blob()).then(b=>{
+    const f=new File([b],'test.mp4',{type:'video/mp4'});
+    loadFile(f);
+    setTimeout(()=>$('go').click(),1600);
+  }).catch(e=>showErr('测试视频加载失败：'+e.message));
+})();
+
+
+function showErr(msg){ const e=$('errbox'); e.textContent=msg; e.classList.remove('hidden'); }
+function clearErr(){ $('errbox').classList.add('hidden'); }
+
+/* 上传 */
+$('drop').addEventListener('click',()=>$('file').click());
+$('file').addEventListener('change',e=>{ if(e.target.files[0]) loadFile(e.target.files[0]); });
+['dragover','dragenter'].forEach(ev=>$('drop').addEventListener(ev,e=>{e.preventDefault();$('drop').classList.add('drag');}));
+['dragleave','drop'].forEach(ev=>$('drop').addEventListener(ev,e=>{e.preventDefault();$('drop').classList.remove('drag');}));
+$('drop').addEventListener('drop',e=>{ const f=e.dataTransfer.files[0]; if(f) loadFile(f); });
+$('liftSel').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b) return;
+  state.lift=b.dataset.lift;
+  [...$('liftSel').children].forEach(x=>x.classList.toggle('on',x===b));
+});
+function loadFile(f){
+  clearErr();
+  if(!f.type.startsWith('video/')){ showErr('请选择视频文件（mp4/webm/mov 等）'); return; }
+  state.file=f; state.url=URL.createObjectURL(f);
+  $('v').src=state.url;
+  $('vinfo').textContent=`${(f.size/1048576).toFixed(1)} MB · ${f.type.split('/')[1]}`;
+  $('stepUp').classList.add('hidden');
+  $('stepAna').classList.remove('hidden');
+  $('v').addEventListener('error',()=>{
+    showErr('视频无法解码：浏览器不支持该编码（HEVC/H.265 常见于 iPhone 拍摄）。请先用剪映/格式工厂转为 H.264 的 .mp4 再上传。');
+  });
+  $('v').addEventListener('loadedmetadata',()=>{
+    const v=$('v');
+    $('ov').width=Math.min(540,v.videoWidth); $('ov').height=Math.min(960,v.videoHeight);
+    drawFrame();
+  },{once:true});
+}
+/* 骨架叠加 */
+$('toggleSkel').addEventListener('click',()=>{
+  state.skel=!state.skel;
+  $('toggleSkel').textContent='骨架叠加：'+(state.skel?'开':'关');
+  drawFrame();
+});
+function drawFrame(){
+  const v=$('v'), c=$('ov'), ctx=c.getContext('2d');
+  if(v.readyState<2) return;
+  const vw=v.videoWidth||c.width, vh=v.videoHeight||c.height;
+  if(c.width!==vw||c.height!==vh){ c.width=Math.min(540,vw); c.height=Math.min(960,vh); }
+  const r=Math.min(c.width/vw,c.height/vh);
+  const dw=vw*r, dh=vh*r, dx=(c.width-dw)/2, dy=(c.height-dh)/2;
+  ctx.clearRect(0,0,c.width,c.height);
+  ctx.save();
+  ctx.drawImage(v,dx,dy,dw,dh);
+  if(state.skel&&state.lms.length){ const idx=nearestIndex(v.currentTime); if(idx>=0) drawSkeleton(ctx,[state.lms[idx]],dx,dy,dw,dh,false); }
+  ctx.restore();
+}
+const BONES=[[11,13],[13,15],[12,14],[14,16],[11,12],[23,24],[11,23],[12,24],[23,25],[25,27],[24,26],[26,28],[27,31],[28,32]];
+function drawSkeleton(ctx,lms,dx,dy,dw,dh,label){
+  ctx.save();
+  ctx.translate(dx,dy); ctx.scale(dw,dh);
+  ctx.strokeStyle='#58a6ff'; ctx.lineWidth=.006; ctx.lineCap='round';
+  for(const [a,b] of BONES){
+    const A=lms[a],B=lms[b];
+    if(!A||!B) continue;
+    ctx.beginPath(); ctx.moveTo(A.x,A.y); ctx.lineTo(B.x,B.y); ctx.stroke();
+  }
+  ctx.fillStyle='#3fb950';
+  for(const i of [11,12,13,14,15,16,23,24,25,26,27,28]){
+    const P=lms[i]; if(!P) continue;
+    ctx.beginPath(); ctx.arc(P.x,P.y,.008,0,Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+  if(label&&lms[0]){
+    const lm=lms[0], f=computeFeatures(lm);
+    if(!f) return;
+    const PX=x=>x*dw+dx, PY=y=>y*dh+dy;
+    ctx.save();
+    ctx.font='bold 14px sans-serif';
+    const put=(txt,px,py)=>{
+      const w=ctx.measureText(txt).width;
+      ctx.fillStyle='rgba(0,0,0,.6)';
+      ctx.fillRect(px-w/2-4,py-14,w+8,20);
+      ctx.fillStyle='#ffd33d'; ctx.fillText(txt,px-w/2,py+2);
+    };
+    put(`髋 ${f.hip.toFixed(0)}°`,PX(lm[25].x),PY(lm[25].y));
+    put(`膝 ${f.knee_l.toFixed(0)}°`,PX(lm[25].x)+40,PY(lm[25].y));
+    put(`躯干 ${f.trunk.toFixed(0)}°`,PX(lm[11].x),PY(lm[11].y)-12);
+    put(`bar ${f.bar_h.toFixed(2)}`,PX(lm[16].x),PY(lm[16].y)+24);
+    ctx.restore();
+  }
+}
+</script>
+</body>
+</html>
