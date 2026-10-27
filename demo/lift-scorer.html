@@ -723,6 +723,7 @@ $('go').addEventListener('click',async ()=>{ if(!state.analyzing) await runAnaly
 async function runAnalysis(){
   if(state.analyzing) return;
   state.analyzing=true; $('go').disabled=true; $('go').textContent='分析中…'; clearErr();
+  let fpsVal=null,durVal=null;
   const ok=await initLandmarker();
   if(!ok){ state.analyzing=false; $('go').disabled=false; $('go').textContent='开始分析'; return; }
   try{
@@ -742,39 +743,45 @@ async function runAnalysis(){
       if(validCnt<4){
         const blackRatio=(diag2&&diag2.sampled)?diag2.black/diag2.sampled:0;
         if(blackRatio>0.5&&!state.triedTranscode&&state.curFile){
-          // 黑帧 = 编码不兼容：浏览器内自动转码 H.264 后自动重分析
+          // 黑帧 = 编码不兼容：浏览器内只抽帧（不重编码，快 3-5 倍）后逐帧检测
           $('go').disabled=true; $('go').textContent='转码中…';
-          showErr('检测到视频编码不兼容（HEVC/H.265 等）。正在浏览器内自动转码，首次需下载转码引擎（约 30MB），转码约 1-2 分钟，请耐心等待…');
+          showErr('检测到视频编码不兼容（HEVC/H.265 等）。正在解码抽取画面帧（首次需下载解码引擎约 30MB），请耐心等待…');
           try{
-            const out=await transcodeToH264(state.curFile,()=>{
+            const frames=await transcodeToFrames(state.curFile,()=>{
               $('go').disabled=true; $('go').textContent='转码中…';
-              $('ptext').textContent='转码进行中…';
             });
-            if(out){
-              state.triedTranscode=true;
-              showErr('转码完成（H.264），正在重新分析…');
-              loadFile(out);
-              setTimeout(async ()=>{ state.analyzing=false; await runAnalysis(); },1800);
-              return;
+            if(!frames||frames.length<8) throw new Error('抽帧结果异常');
+            state.triedTranscode=true;
+            showErr('画面帧提取完成（'+frames.length+' 帧），正在逐帧检测姿态…');
+            const r2=await detectFrames(frames);
+            state.lms=r2.lms; state.ts=r2.ts;
+            validCnt=state.lms.filter(Boolean).length;
+            if(validCnt>=4){
+              fpsVal=12; durVal=r2.ts.length/12;
+            }else{
+              showErr('已成功提取画面，但仍未检测到人体（'+validCnt+' 帧有效）。请确认：① 全身入镜（脚踝到头顶完整）；② 侧面机位；③ 光线充足。');
+              state.analyzing=false; $('go').disabled=false; $('go').textContent='开始分析';
+              $('prog').querySelector('i').style.width='0%'; return;
             }
-            throw new Error('转码无输出');
           }catch(e){
             showErr('自动转码失败：'+e.message+'。可手动转码：剪映/格式工厂/iOS「设置→相机→格式→兼容性最佳」后重传。');
+            state.analyzing=false; $('go').disabled=false; $('go').textContent='开始分析';
+            $('prog').querySelector('i').style.width='0%'; return;
+          }
+        }
+        if(validCnt<4){
+          if(blackRatio>0.5){
+            showErr('视频画面读取为黑帧（'+validCnt+' 帧有效）：多为 iPhone 拍摄的 HEVC/H.265 编码，浏览器无法为 AI 引擎取到画面。请将视频转为 H.264 的 .mp4（剪映/格式工厂/iOS「设置→相机→格式→兼容性最佳」）后再上传。');
+          }else{
+            showErr('仍未检测到人体（'+validCnt+' 帧有效）。请确认：① 全身入镜（脚踝到头顶完整）；② 侧面机位；③ 光线充足；④ 只含一次完整动作。若画面正常仍失败，请转 H.264 后重试。');
           }
           state.analyzing=false; $('go').disabled=false; $('go').textContent='开始分析';
           $('prog').querySelector('i').style.width='0%'; return;
         }
-        if(blackRatio>0.5){
-          showErr('视频画面读取为黑帧（'+validCnt+' 帧有效）：多为 iPhone 拍摄的 HEVC/H.265 编码，浏览器无法为 AI 引擎取到画面。请将视频转为 H.264 的 .mp4（剪映/格式工厂/iOS「设置→相机→格式→兼容性最佳」）后再上传。');
-        }else{
-          showErr('仍未检测到人体（'+validCnt+' 帧有效）。请确认：① 全身入镜（脚踝到头顶完整）；② 侧面机位；③ 光线充足；④ 只含一次完整动作。若画面正常仍失败，请转 H.264 后重试。');
-        }
-        state.analyzing=false; $('go').disabled=false; $('go').textContent='开始分析';
-        $('prog').querySelector('i').style.width='0%'; return;
       }
     }
-    const fps=lms.length/Math.max(.1,$('v').duration);
-    const r=computePipeline(lms,fps,$('v').duration);
+    const fps=fpsVal??(lms.length/Math.max(.1,$('v').duration));
+    const r=computePipeline(lms,fps,durVal??$('v').duration);
     if(r.err){ showErr(r.err); }
     else renderResult(r);
   }catch(e){ showErr('分析失败：'+e.message); }
@@ -782,17 +789,17 @@ async function runAnalysis(){
   $('prog').querySelector('i').style.width='0%';
 }
 
-/* 浏览器内自动转码：任意浏览器可播放编码 → H.264 mp4（ffmpeg.wasm 按需加载） */
+/* 浏览器内自动解码抽帧：任意浏览器可播放编码 → JPEG 帧序列（不重编码，快 3-5 倍） */
 let ffmpegSingleton=null;
-async function transcodeToH264(file,onProgress){
+const FRAME_FPS=12;
+async function transcodeToFrames(file,onProgress){
   try{
     const mod=await import('https://fastly.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js');
     const util=await import('https://fastly.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js');
     if(!ffmpegSingleton){
-      $('ptext').textContent='正在下载转码引擎（约 30MB，仅首次）…';
+      $('ptext').textContent='正在下载解码引擎（约 30MB，仅首次）…';
       const fm=new mod.FFmpeg();
-      fm.on('progress',({progress})=>{ if(progress!=null){ $('ptext').textContent='转码中 '+Math.round(progress*100)+'%…'; if(onProgress)onProgress(); } });
-      // jsDelivr 支持 CORS，直接传 URL（比 toBlobURL 少一次整包拷贝，移动端更快更稳）
+      fm.on('progress',({progress})=>{ if(progress!=null){ $('ptext').textContent='解码中 '+Math.round(progress*100)+'%…'; if(onProgress)onProgress(); } });
       await fm.load({
         coreURL:'https://fastly.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
         wasmURL:'https://fastly.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm'
@@ -801,18 +808,63 @@ async function transcodeToH264(file,onProgress){
     }
     const fm=ffmpegSingleton;
     await fm.writeFile('in.bin',await util.fetchFile(file));
-    $('ptext').textContent='正在转码为 H.264（约 1-2 分钟）…';
-    await fm.exec(['-i','in.bin','-vf','scale=720:-2','-c:v','libx264','-preset','veryfast','-crf','30','-an','-movflags','+faststart','out.mp4']);
-    const data=await fm.readFile('out.mp4');
-    await fm.deleteFile('in.bin'); await fm.deleteFile('out.mp4');
-    const out=new File([data.buffer],'converted_'+Date.now()+'.mp4',{type:'video/mp4'});
-    if(out.size<1024) throw new Error('转码输出异常（可能不支持该编码）');
-    return out;
+    $('ptext').textContent='正在解码画面帧（'+FRAME_FPS+'fps，约 30-60 秒）…';
+    // 只解码抽帧，不重编码；480px 足够姿态检测，速度优先
+    await fm.exec(['-i','in.bin','-vf',`scale=480:-2,fps=${FRAME_FPS}`,'-f','image2','-q:v','5','f_%03d.jpg']);
+    const frames=[];
+    for(let n=1;n<=400;n++){
+      const name='f_'+String(n).padStart(3,'0')+'.jpg';
+      try{
+        const d=await fm.readFile(name);
+        frames.push(new File([d.buffer],name,{type:'image/jpeg'}));
+      }catch(e){ break; }
+      if(n%20===0){ if(onProgress)onProgress(); $('ptext').textContent='已提取 '+n+' 帧…'; }
+    }
+    try{ await fm.deleteFile('in.bin'); }catch(e){}
+    for(let n=1;n<=frames.length;n++){ try{ await fm.deleteFile('f_'+String(n).padStart(3,'0')+'.jpg'); }catch(e){} }
+    if(frames.length<8) throw new Error('未提取到足够画面帧（可能不支持该编码）');
+    return frames;
   }catch(e){
-    // 转码失败时清理单例，避免坏状态残留
     ffmpegSingleton=null;
     throw e;
   }
+}
+/* IMAGE 模式姿态检测（用于解码后的 JPEG 帧序列） */
+let imgLandmarker=null;
+async function initImageLandmarker(){
+  if(imgLandmarker) return imgLandmarker;
+  const fileset=await FilesetResolver.forVisionTasks(ML_WASM);
+  const modelAbs=new URL('models/pose_landmarker_full.task',location.href).href;
+  imgLandmarker=await PoseLandmarker.createFromOptions(fileset,{
+    baseOptions:{modelAssetPath:modelAbs,delegate:webglOk()?'GPU':'CPU'},
+    runningMode:'IMAGE',numPoses:2,
+    minPoseDetectionConfidence:.4,minTrackingConfidence:.4
+  });
+  return imgLandmarker;
+}
+async function detectFrames(files){
+  const lm=await initImageLandmarker();
+  const lms=[],ts=[];
+  let prevHip=null;
+  for(let i=0;i<files.length;i++){
+    let chosen=null;
+    try{
+      const bmp=await createImageBitmap(files[i]);
+      const res=await lm.detect(bmp);
+      if(bmp.close) bmp.close();
+      const poses=res.poseLandmarks||[];
+      if(poses.length===1) chosen=poses[0];
+      else if(poses.length>1){
+        if(prevHip===null) chosen=poses.reduce((m,p)=>size(p)>size(m)?p:m);
+        else chosen=poses.reduce((m,p)=>distHip(p,prevHip)<distHip(m,prevHip)?p:m);
+      }
+      if(chosen) prevHip=[(chosen[23].x+chosen[24].x)/2,(chosen[23].y+chosen[24].y)/2];
+    }catch(e){}
+    lms.push(chosen); ts.push(i/FRAME_FPS);
+    $('prog').querySelector('i').style.width=(Math.min(1,(i+1)/files.length)*100)+'%';
+    $('ptext').textContent=`帧检测 ${i+1}/${files.length} · 姿态 ${lms.filter(Boolean).length} 帧`;
+  }
+  return {lms,ts};
 }
 
 /* 测试入口：?v=<视频URL> 自动加载并分析（不影响正常使用） */
