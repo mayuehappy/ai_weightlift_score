@@ -397,7 +397,7 @@ function buildSuggestions(comps,metrics){
 }
 /* ===== 页面逻辑 ===== */
 const $=id=>document.getElementById(id);
-const state={lift:'clean',file:null,url:null,lms:[],ts:[],landmarker:null,skel:true,analyzing:false};
+const state={lift:'clean',file:null,url:null,lms:[],ts:[],landmarker:null,skel:true,analyzing:false,curFile:null,triedTranscode:false};
 
 /* ===== MediaPipe 初始化与逐帧分析 ===== */
 function nearestIndex(t){
@@ -719,7 +719,8 @@ function seekDraw(canvas,time,lm){
     try{ v.currentTime=time; }catch(e){ res(); }
   });
 }
-$('go').addEventListener('click',async ()=>{
+$('go').addEventListener('click',async ()=>{ if(!state.analyzing) await runAnalysis(); });
+async function runAnalysis(){
   if(state.analyzing) return;
   state.analyzing=true; $('go').disabled=true; $('go').textContent='分析中…'; clearErr();
   const ok=await initLandmarker();
@@ -740,6 +741,29 @@ $('go').addEventListener('click',async ()=>{
       }catch(e){}
       if(validCnt<4){
         const blackRatio=(diag2&&diag2.sampled)?diag2.black/diag2.sampled:0;
+        if(blackRatio>0.5&&!state.triedTranscode&&state.curFile){
+          // 黑帧 = 编码不兼容：浏览器内自动转码 H.264 后自动重分析
+          $('go').disabled=true; $('go').textContent='转码中…';
+          showErr('检测到视频编码不兼容（HEVC/H.265 等）。正在浏览器内自动转码，首次需下载转码引擎（约 30MB），转码约 1-2 分钟，请耐心等待…');
+          try{
+            const out=await transcodeToH264(state.curFile,()=>{
+              $('go').disabled=true; $('go').textContent='转码中…';
+              $('ptext').textContent='转码进行中…';
+            });
+            if(out){
+              state.triedTranscode=true;
+              showErr('转码完成（H.264），正在重新分析…');
+              loadFile(out);
+              setTimeout(async ()=>{ state.analyzing=false; await runAnalysis(); },1800);
+              return;
+            }
+            throw new Error('转码无输出');
+          }catch(e){
+            showErr('自动转码失败：'+e.message+'。可手动转码：剪映/格式工厂/iOS「设置→相机→格式→兼容性最佳」后重传。');
+          }
+          state.analyzing=false; $('go').disabled=false; $('go').textContent='开始分析';
+          $('prog').querySelector('i').style.width='0%'; return;
+        }
         if(blackRatio>0.5){
           showErr('视频画面读取为黑帧（'+validCnt+' 帧有效）：多为 iPhone 拍摄的 HEVC/H.265 编码，浏览器无法为 AI 引擎取到画面。请将视频转为 H.264 的 .mp4（剪映/格式工厂/iOS「设置→相机→格式→兼容性最佳」）后再上传。');
         }else{
@@ -756,7 +780,40 @@ $('go').addEventListener('click',async ()=>{
   }catch(e){ showErr('分析失败：'+e.message); }
   state.analyzing=false; $('go').disabled=false; $('go').textContent='开始分析';
   $('prog').querySelector('i').style.width='0%';
-});
+}
+
+/* 浏览器内自动转码：任意浏览器可播放编码 → H.264 mp4（ffmpeg.wasm 按需加载） */
+let ffmpegSingleton=null;
+async function transcodeToH264(file,onProgress){
+  try{
+    const mod=await import('https://fastly.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js');
+    const util=await import('https://fastly.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js');
+    if(!ffmpegSingleton){
+      $('ptext').textContent='正在下载转码引擎（约 30MB，仅首次）…';
+      const fm=new mod.FFmpeg();
+      fm.on('progress',({progress})=>{ if(progress!=null){ $('ptext').textContent='转码中 '+Math.round(progress*100)+'%…'; if(onProgress)onProgress(); } });
+      // jsDelivr 支持 CORS，直接传 URL（比 toBlobURL 少一次整包拷贝，移动端更快更稳）
+      await fm.load({
+        coreURL:'https://fastly.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
+        wasmURL:'https://fastly.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm'
+      });
+      ffmpegSingleton=fm;
+    }
+    const fm=ffmpegSingleton;
+    await fm.writeFile('in.bin',await util.fetchFile(file));
+    $('ptext').textContent='正在转码为 H.264（约 1-2 分钟）…';
+    await fm.exec(['-i','in.bin','-vf','scale=720:-2','-c:v','libx264','-preset','veryfast','-crf','30','-an','-movflags','+faststart','out.mp4']);
+    const data=await fm.readFile('out.mp4');
+    await fm.deleteFile('in.bin'); await fm.deleteFile('out.mp4');
+    const out=new File([data.buffer],'converted_'+Date.now()+'.mp4',{type:'video/mp4'});
+    if(out.size<1024) throw new Error('转码输出异常（可能不支持该编码）');
+    return out;
+  }catch(e){
+    // 转码失败时清理单例，避免坏状态残留
+    ffmpegSingleton=null;
+    throw e;
+  }
+}
 
 /* 测试入口：?v=<视频URL> 自动加载并分析（不影响正常使用） */
 (function(){
@@ -801,6 +858,9 @@ function loadFile(f){
   clearErr();
   if(!f.type.startsWith('video/')){ showErr('请选择视频文件（mp4/webm/mov 等）'); return; }
   state.file=f; state.url=URL.createObjectURL(f);
+  state.curFile=f;
+  // 换新视频时重置转码标记
+  state.triedTranscode=false;
   $('v').src=state.url;
   $('vinfo').textContent=`${(f.size/1048576).toFixed(1)} MB · ${f.type.split('/')[1]}`;
   $('stepUp').classList.add('hidden');
