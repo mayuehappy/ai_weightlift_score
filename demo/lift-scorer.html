@@ -742,8 +742,20 @@ async function runAnalysis(){
       }catch(e){}
       if(validCnt<4){
         const blackRatio=(diag2&&diag2.sampled)?diag2.black/diag2.sampled:0;
-        if(blackRatio>0.5&&!state.triedTranscode&&state.curFile){
-          // 黑帧 = 编码不兼容：浏览器内只抽帧（不重编码，快 3-5 倍）后逐帧检测
+        // ① 画面正常但 detectForVideo 取不到帧（iOS 等系统硬解 HEVC 场景）：canvas 抽帧 + IMAGE 模式，0 下载 0 等待
+        if(!state.triedCanvas&&blackRatio<=0.5&&state.curFile){
+          $('go').disabled=true; $('go').textContent='分析中…';
+          showErr('正在用备用画面路径重新分析（画面可显示即无需下载引擎，稍等）…');
+          try{
+            const r3=await analyzeCanvasFrames();
+            state.lms=r3.lms; state.ts=r3.ts;
+            state.triedCanvas=true;
+            validCnt=state.lms.filter(Boolean).length;
+            if(validCnt>=4){ fpsVal=r3.fps; durVal=state.ts.length/r3.fps; showErr(''); }
+          }catch(e){}
+        }
+        // ② 编码不可渲染（真黑帧）：ffmpeg 解码抽帧兜底
+        if(validCnt<4&&!state.triedTranscode&&state.curFile){
           $('go').disabled=true; $('go').textContent='转码中…';
           showErr('检测到视频编码不兼容（HEVC/H.265 等）。正在解码抽取画面帧（首次需下载解码引擎约 30MB），请耐心等待…');
           try{
@@ -829,18 +841,74 @@ async function transcodeToFrames(file,onProgress){
     throw e;
   }
 }
-/* IMAGE 模式姿态检测（用于解码后的 JPEG 帧序列） */
+/* IMAGE 模式姿态检测（用于 canvas 抽帧 / 解码 JPEG 帧序列；GPU 失败可重建 CPU） */
 let imgLandmarker=null;
-async function initImageLandmarker(){
-  if(imgLandmarker) return imgLandmarker;
+let imgUseGPU=null;
+async function initImageLandmarker(useGPU){
+  if(imgLandmarker&&(useGPU===undefined||useGPU===imgUseGPU)) return imgLandmarker;
+  if(imgLandmarker){ try{ imgLandmarker.close(); }catch(e){} imgLandmarker=null; }
   const fileset=await FilesetResolver.forVisionTasks(ML_WASM);
   const modelAbs=new URL('models/pose_landmarker_full.task',location.href).href;
+  const gpu=(useGPU===undefined)?webglOk():useGPU;
+  imgUseGPU=gpu;
   imgLandmarker=await PoseLandmarker.createFromOptions(fileset,{
-    baseOptions:{modelAssetPath:modelAbs,delegate:webglOk()?'GPU':'CPU'},
+    baseOptions:{modelAssetPath:modelAbs,delegate:gpu?'GPU':'CPU'},
     runningMode:'IMAGE',numPoses:2,
     minPoseDetectionConfidence:.4,minTrackingConfidence:.4
   });
   return imgLandmarker;
+}
+function seekOnce(v,t){
+  return new Promise(res=>{
+    let fired=false;
+    const h=()=>{ if(fired)return; fired=true; v.removeEventListener('seeked',h); res(); };
+    v.addEventListener('seeked',h);
+    setTimeout(()=>{ if(!fired){ fired=true; v.removeEventListener('seeked',h); res(); } },700);
+    try{ v.currentTime=t; }catch(e){ if(!fired){ fired=true; res(); } }
+  });
+}
+/* 备用画面路径：canvas 抽帧（iOS 等系统可解码但 detectForVideo 失败的编码）+ IMAGE 模式检测，无需下载引擎 */
+async function analyzeCanvasFrames(){
+  const v=$('v'); v.pause();
+  const total=Math.max(24,Math.min(120,Math.round(v.duration*12)));
+  const fps=total/Math.max(.1,v.duration);
+  const imgs=[];
+  for(let i=0;i<total;i++){
+    const t=Math.min(i*(v.duration/total),v.duration-0.05);
+    await seekOnce(v,t);
+    const c=document.createElement('canvas');
+    c.width=v.videoWidth||720; c.height=v.videoHeight||1280;
+    try{ c.getContext('2d',{willReadFrequently:true}).drawImage(v,0,0,c.width,c.height); }catch(e){}
+    imgs.push(c);
+    $('prog').querySelector('i').style.width=(Math.min(1,(i+1)/total)*100)+'%';
+    $('ptext').textContent=`画面抽取 ${i+1}/${total}…`;
+  }
+  const lms=[],ts=[];
+  let prevHip=null,lm=null;
+  try{ lm=await initImageLandmarker(); }catch(e){}
+  if(!lm) return {lms,ts,fps};
+  for(let i=0;i<imgs.length;i++){
+    let chosen=null;
+    try{
+      const res=await lm.detect(imgs[i]);
+      const poses=res.poseLandmarks||[];
+      if(poses.length===1) chosen=poses[0];
+      else if(poses.length>1){
+        if(prevHip===null) chosen=poses.reduce((m,p)=>size(p)>size(m)?p:m);
+        else chosen=poses.reduce((m,p)=>distHip(p,prevHip)<distHip(m,prevHip)?p:m);
+      }
+      if(chosen) prevHip=[(chosen[23].x+chosen[24].x)/2,(chosen[23].y+chosen[24].y)/2];
+    }catch(e){
+      // detect 报错（多为 GPU 纹理上传问题）→ 重建 CPU 模式后重试本帧
+      try{
+        if(lm===imgLandmarker&&imgUseGPU!==false){ lm=await initImageLandmarker(false); i--; continue; }
+      }catch(e2){}
+    }
+    lms.push(chosen); ts.push(i/fps);
+    $('prog').querySelector('i').style.width=(Math.min(1,(i+1)/imgs.length)*100)+'%';
+    $('ptext').textContent=`帧检测 ${i+1}/${imgs.length} · 姿态 ${lms.filter(Boolean).length} 帧`;
+  }
+  return {lms,ts,fps};
 }
 async function detectFrames(files){
   const lm=await initImageLandmarker();
