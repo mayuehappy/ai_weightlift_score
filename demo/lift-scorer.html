@@ -85,6 +85,7 @@ footer{color:var(--sub);font-size:12px;line-height:1.7;text-align:center;margin-
     <button data-lift="snatch">抓举 Snatch</button>
   </div>
   <input type="file" id="file" accept="video/*" class="hidden">
+  <button class="btn ghost" id="demoV" style="width:100%;margin-top:10px;">没有视频？点这里试用示例视频（高翻 · 7 秒）</button>
 </div>
 
 <!-- ===== 步骤2 预览/分析 ===== -->
@@ -700,6 +701,18 @@ $('go').addEventListener('click',async ()=>{
     setTimeout(()=>$('go').click(),1600);
   }).catch(e=>showErr('测试视频加载失败：'+e.message));
 })();
+
+
+/* 示例视频按钮：加载线上示例并自动分析（手机/无视频时直接试用） */
+$('demoV').addEventListener('click',()=>{
+  if(state.busy) return;
+  showErr('正在加载示例视频…'); clearErr();
+  fetch('videos/test_clean.mp4').then(r=>r.blob()).then(b=>{
+    const f=new File([b],'test_clean.mp4',{type:'video/mp4'});
+    loadFile(f);
+    setTimeout(()=>$('go').click(),1600);
+  }).catch(e=>showErr('示例视频加载失败：'+e.message));
+});
 
 
 function showErr(msg){ const e=$('errbox'); e.textContent=msg; e.classList.remove('hidden'); }
