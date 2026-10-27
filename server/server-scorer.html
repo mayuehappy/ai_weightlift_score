@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>举重 AI 打分 · 服务器版</title>
+<style>
+  :root{--bg:#0e0f14;--card:#171a23;--card2:#1e2230;--line:#2a2f42;--txt:#e8eaf2;--sub:#9aa0b4;--acc:#4d7cff;--ok:#38d39f;--warn:#ffb454;--bad:#ff6b6b;}
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+  body{background:var(--bg);color:var(--txt);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",Roboto,sans-serif;min-height:100vh;padding:16px 14px 40px;}
+  .wrap{max-width:560px;margin:0 auto;}
+  .head{text-align:center;margin:8px 0 16px;}
+  .head h1{font-size:22px;font-weight:700;letter-spacing:.5px;}
+  .head p{color:var(--sub);font-size:12px;margin-top:4px;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px;}
+  .card h2{font-size:15px;margin-bottom:12px;display:flex;align-items:center;gap:6px;}
+  .card h2 .no{background:var(--acc);color:#fff;width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;}
+  .up{margin-bottom:12px;}
+  .up video{width:100%;border-radius:12px;background:#000;display:none;}
+  .btn{width:100%;padding:14px;border:none;border-radius:12px;font-size:16px;font-weight:600;cursor:pointer;}
+  .btn.p{background:var(--acc);color:#fff;}
+  .btn.g{background:var(--ok);color:#06281c;}
+  .btn:disabled{opacity:.55;cursor:not-allowed;}
+  .btn.s{background:var(--card2);color:var(--txt);border:1px dashed var(--line);}
+  .sel{display:flex;gap:8px;margin-bottom:12px;}
+  .sel label{flex:1;text-align:center;padding:10px;border:1.5px solid var(--line);border-radius:10px;font-size:14px;color:var(--sub);cursor:pointer;}
+  .sel input{display:none;}
+  .sel input:checked+span{color:var(--acc);font-weight:700;}
+  .sel label:has(input:checked){border-color:var(--acc);background:rgba(77,124,255,.08);}
+  .fmeta{color:var(--sub);font-size:12px;margin-top:8px;text-align:center;}
+  .prog{height:8px;background:var(--card2);border-radius:4px;overflow:hidden;margin:12px 0 6px;display:none;}
+  .prog i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--acc),#7aa2ff);transition:width .2s;border-radius:4px;}
+  .ptext{font-size:12px;color:var(--sub);text-align:center;margin-top:4px;}
+  .err{background:rgba(255,107,107,.1);border:1px solid rgba(255,107,107,.35);color:#ffb3b3;border-radius:12px;padding:12px 14px;font-size:13px;line-height:1.6;margin-bottom:14px;display:none;white-space:pre-line;}
+  /* 结果 */
+  .hero{display:flex;align-items:center;gap:16px;padding:4px 2px 8px;}
+  .score{font-size:52px;font-weight:800;line-height:1;}
+  .score small{font-size:16px;color:var(--sub);font-weight:500;}
+  .lvl{display:inline-block;padding:4px 12px;border-radius:99px;font-size:14px;font-weight:700;}
+  .lvl.g{background:rgba(56,211,159,.15);color:var(--ok);}
+  .lvl.o{background:rgba(255,180,84,.15);color:var(--warn);}
+  .lvl.r{background:rgba(255,107,107,.15);color:var(--bad);}
+  .hero .meta{font-size:12px;color:var(--sub);margin-top:6px;}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th{color:var(--sub);text-align:left;font-weight:600;padding:8px 6px;border-bottom:1px solid var(--line);}
+  td{padding:9px 6px;border-bottom:1px solid var(--line);vertical-align:top;}
+  td.sc{font-weight:700;color:var(--acc);white-space:nowrap;}
+  .un{color:var(--bad);font-size:11px;font-weight:700;}
+  .met{color:var(--sub);font-size:11px;}
+  .sug{color:var(--txt);font-size:12px;margin-top:2px;}
+  .kfs{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .kfs figure{background:var(--card2);border-radius:10px;overflow:hidden;}
+  .kfs img{width:100%;display:block;aspect-ratio:3/4;object-fit:cover;background:#000;}
+  .kfs figcaption{font-size:11px;color:var(--sub);padding:6px 8px;}
+  .notes{font-size:12px;color:var(--sub);line-height:1.7;}
+  .foot{text-align:center;color:#5a5f72;font-size:11px;margin-top:22px;line-height:1.6;}
+  .hidden{display:none!important;}
+  .spin{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:6px;}
+  @keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <h1>举重 AI 打分</h1>
+    <p>上传视频 · 服务器分析 · 十维规则打分 · 任何格式都支持</p>
+  </div>
+
+  <div class="err" id="err"></div>
+
+  <div class="card">
+    <h2><span class="no">1</span>上传视频</h2>
+    <div class="up">
+      <video id="pv" controls playsinline></video>
+      <button class="btn s" id="pick">选择视频（mp4 / mov / 其它常见格式）</button>
+      <input type="file" id="file" accept="video/*" style="display:none">
+      <div class="fmeta" id="fmeta"></div>
+    </div>
+    <h2 style="margin-top:14px"><span class="no">2</span>动作类型</h2>
+    <div class="sel">
+      <label><input type="radio" name="lift" value="clean" checked><span>高翻 clean</span></label>
+      <label><input type="radio" name="lift" value="snatch"><span>抓举 snatch</span></label>
+    </div>
+    <button class="btn p" id="go" disabled>开始分析</button>
+    <div class="prog" id="prog"><i></i></div>
+    <div class="ptext" id="ptext"></div>
+  </div>
+
+  <div id="res" class="hidden">
+    <div class="card">
+      <div class="hero">
+        <div class="score"><span id="sc">0</span><small> 分</small></div>
+        <div>
+          <span class="lvl g" id="lvl">—</span>
+          <div class="meta" id="meta"></div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>十维评分</h2>
+      <table id="tbl"></table>
+    </div>
+    <div class="card">
+      <h2>四阶段关键帧</h2>
+      <div class="kfs" id="kfs"></div>
+    </div>
+    <div class="card">
+      <h2>标注视频</h2>
+      <video id="av" controls playsinline style="width:100%;border-radius:12px;background:#000"></video>
+    </div>
+    <div class="card">
+      <h2>可靠性与说明</h2>
+      <div class="notes" id="notes"></div>
+    </div>
+  </div>
+
+  <div class="foot">评分供训练参考，非竞赛裁判标准。<br>视频仅用于本次分析，服务器 3 天后自动清理。</div>
+</div>
+
+<script>
+const $=s=>document.getElementById(s);
+window.addEventListener('error',e=>{ const d=$('err'); if(d){ d.textContent='页面脚本错误：'+(e.message||e.type||''); d.style.display='block'; } });
+const COMP_CN={extension:"发力充分性",bar_path:"杠铃贴身",catch:"接铃锁定",squat:"下蹲深度",trunk:"躯干稳定",flow:"动作连贯",double_pull:"二次拉检测",timing:"发力时机",foot:"脚掌稳定",sequence:"伸展顺序"};
+const PH_CN={setup:"预备",ext:"发力",catch:"接铃",stand:"站起"};
+let curFile=null, analyzing=false;
+
+function showErr(t){ const e=$('err'); e.textContent=t; e.style.display='block'; }
+function clearErr(){ $('err').style.display='none'; }
+function setProg(p){ $('prog').style.display='block'; $('prog').querySelector('i').style.width=Math.min(100,p)+'%'; }
+function setText(t){ $('ptext').textContent=t; }
+function resetProg(){ $('prog').style.display='none'; $('prog').querySelector('i').style.width='0%'; $('ptext').textContent=''; }
+
+$('pick').addEventListener('click',()=>$('file').click());
+
+/* 测试入口：?demo 时渲染内置示例结果（仅用于验证 UI） */
+if(location.search.indexOf('demo')>=0){
+  render({
+    total_score:87.1, grade:'优秀', lift:'clean', fps:30.0,
+    view_quality:{note:''},
+    phases_sec:{setup:0.0,ext:2.6,catch:3.1,stand:3.2},
+    components:{
+      extension:{score:90.0,metric:'175°',reliable:true,suggestion:'伸髋发力充分，髋关节角度接近充分伸展。'},
+      bar_path:{score:88.0,metric:'0.12',reliable:true,suggestion:'杠铃贴身良好，过膝后贴合躯干上行。'},
+      catch:{score:92.0,metric:'128°',reliable:true,suggestion:'接铃锁定稳定，前架位支撑干脆。'},
+      squat:{score:85.0,metric:'121°',reliable:true,suggestion:'下蹲深度足够，可更稳地承接杠铃。'},
+      trunk:{score:86.0,metric:'14°',reliable:true,suggestion:'躯干角度控制良好，无明显前倾。'},
+      flow:{score:90.0,metric:'87',reliable:true,suggestion:'动作连贯，无明显停顿。'},
+      double_pull:{score:80.0,metric:'0.012',reliable:true,suggestion:'二次发力特征清晰。'},
+      timing:{score:84.0,metric:'0.05',reliable:true,suggestion:'发力时机协调。'},
+      foot:{score:88.0,metric:'0.02',reliable:true,suggestion:'脚掌稳定，无明显挪步。'},
+      sequence:{score:89.0,metric:'髋先于膝',reliable:true,suggestion:'伸展顺序正确。'}
+    },
+    notes:['示例数据（demo 模式），仅用于界面展示。','评分供训练参考，非竞赛裁判标准。'],
+    media:null
+  });
+  $('res').classList.remove('hidden');
+}
+$('file').addEventListener('change',e=>{
+  const f=e.target.files[0];
+  if(!f) return;
+  curFile=f;
+  clearErr();
+  const mb=(f.size/1048576).toFixed(1);
+  $('fmeta').textContent=`${f.name} · ${mb} MB · ${(f.type||'未知格式')}`;
+  const url=URL.createObjectURL(f);
+  const v=$('pv');
+  v.src=url; v.style.display='block';
+  v.onloadedmetadata=()=>{ $('pv').play().catch(()=>{}); };
+  $('go').disabled=false;
+  $('res').classList.add('hidden');
+});
+
+$('go').addEventListener('click',async()=>{
+  if(analyzing||!curFile) return;
+  analyzing=true; $('go').disabled=true; $('go').textContent='上传中…';
+  clearErr(); $('res').classList.add('hidden');
+  const lift=document.querySelector('input[name=lift]:checked').value;
+  try{
+    // 1) 上传（XHR 显示真实进度）
+    const data=await uploadWithProgress(curFile, lift);
+    setProg(100); setText('服务器已接收，正在分析（约 20-60 秒）…');
+    $('go').textContent='分析中…';
+    // 2) 轮询等待结果（FastAPI 长任务也可能直接返回）
+    if(data.job){
+      // 预留：如将来拆为异步任务，这里轮询
+    }
+    render(data);
+  }catch(e){
+    showErr('分析失败：'+(e.message||e));
+  }finally{
+    analyzing=false; $('go').disabled=false; $('go').textContent='开始分析';
+    resetProg();
+  }
+});
+
+function uploadWithProgress(file, lift){
+  return new Promise((resolve,reject)=>{
+    const xhr=new XMLHttpRequest();
+    xhr.open('POST','/api/analyze');
+    xhr.upload.onprogress=e=>{
+      if(e.lengthComputable){ setProg(e.loaded/e.total*100); setText(`上传中 ${Math.round(e.loaded/e.total*100)}%（${(e.loaded/1048576).toFixed(1)}MB）`); }
+    };
+    xhr.onload=()=>{
+      let d=null;
+      try{ d=JSON.parse(xhr.responseText); }catch(e){ d={error:'服务器响应异常'}; }
+      if(xhr.status>=200&&xhr.status<300&&!d.error){ resolve(d); }
+      else{ reject(new Error(d.error||('HTTP '+xhr.status))); }
+    };
+    xhr.onerror=()=>reject(new Error('网络错误：无法连接服务器'));
+    const fd=new FormData();
+    fd.append('file',file);
+    fd.append('lift',lift);
+    xhr.send(fd);
+  });
+}
+
+function render(r){
+  // r: {total_score, grade, video, lift, fps, window, view_quality, phases_sec, components, notes, media}
+  $('sc').textContent=Math.round(r.total_score*10)/10;
+  const lv=$('lvl'); lv.textContent=r.grade;
+  lv.className='lvl '+(r.grade==='优秀'?'g':r.grade==='良好'?'o':'r');
+  $('meta').textContent=`${r.lift==='snatch'?'抓举':'高翻'} · ${(r.fps||0).toFixed(1)}fps · ${r.view_quality&&r.view_quality.note?r.view_quality.note:''}`;
+  // 表格
+  let html='<tr><th>维度</th><th>得分</th><th>实测</th><th>说明</th></tr>';
+  for(const k of Object.keys(COMP_CN)){
+    const c=r.components[k]; if(!c) continue;
+    html+=`<tr><td>${COMP_CN[k]}</td><td class="sc">${c.reliable?Math.round(c.score*10)/10:'–'}</td><td>${c.metric||''}${c.reliable?'':'<div class="un">已剔除</div>'}</td><td>${c.suggestion||''}</td></tr>`;
+  }
+  $('tbl').innerHTML=html;
+  // 关键帧
+  const kf=r.media&&r.media.keyframes;
+  $('kfs').innerHTML=Object.keys(PH_CN).map(k=>{
+    const src=kf&&kf[k]?kf[k]:'';
+    return `<figure>${src?`<img src="${src}" alt="${PH_CN[k]}">`:'<div style="height:100px"></div>'}<figcaption>${PH_CN[k]} @ ${(r.phases_sec&&r.phases_sec[k]!=null)?Number(r.phases_sec[k]).toFixed(1):'—'}s</figcaption></figure>`;
+  }).join('');
+  // 标注视频
+  const av=$('av');
+  if(r.media&&r.media.annotated){ av.src=r.media.annotated; av.style.display='block'; }
+  else av.style.display='none';
+  // 说明
+  $('notes').textContent=(r.notes||[]).join('；')||'全部有效分项正常参与评分。';
+  $('res').classList.remove('hidden');
+  $('res').scrollIntoView({behavior:'smooth'});
+}
+</script>
+</body>
+</html>

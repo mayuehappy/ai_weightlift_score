@@ -1,0 +1,14 @@
+services:
+  scorer:
+    build: .
+    image: lift-scorer-server:latest
+    container_name: lift-scorer-server
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # 可选：设置后手机访问需带 ?token=xxx 或 X-Api-Token 头（防他人滥用）
+      API_TOKEN: ""
+      MAX_MB: "200"
+    volumes:
+      - ./jobs:/app/jobs
