@@ -456,17 +456,17 @@ function webglOk(){
   try{ const c=document.createElement('canvas'); return !!(c.getContext('webgl2')||c.getContext('webgl')); }
   catch(e){ return false; }
 }
-function analyzeFrames(){
+function analyzeFrames(forceSeek){
   const v=$('v');
   return new Promise((resolve,reject)=>{
     const lms=[],ts=[];
     v.pause();
     try{ v.currentTime=0; }catch(e){}
     let prevHip=null,first=true;
-    // 移动 Safari 等无 requestVideoFrameCallback 时直接走逐帧 seek 采集
-    if(!('requestVideoFrameCallback' in v)){ seekCollect().then(resolve).catch(reject); return; }
+    // 移动 Safari 等无 requestVideoFrameCallback，或强制诊断重采时，直接走逐帧 seek 采集
+    if(forceSeek||!('requestVideoFrameCallback' in v)){ seekCollect().then(resolve).catch(reject); return; }
     let lastT=-1, stallTimer=null, finished=false;
-    const finish=()=>{ if(finished) return; finished=true; v.pause(); clearInterval(stallTimer); resolve({lms,ts}); };
+    const finish=()=>{ if(finished) return; finished=true; v.pause(); clearInterval(stallTimer); resolve({lms,ts,diag:{black:0,sampled:0}}); };
     const tick=async ()=>{
       if(finished) return;
       if(!state.landmarker){ finish(); return; }
@@ -513,8 +513,13 @@ function analyzeFrames(){
       v.pause();
       const out={lms:[],ts:[]};
       let i=0,errs=0,lastErr='';
+      let black=0,sampled=0;
       const step=()=>{
-        if(i>=total){ v.pause(); res2(out); return; }
+        if(i>=total){
+          v.pause();
+          res2({lms:out.lms,ts:out.ts,diag:{black,sampled}});
+          return;
+        }
         // 最后一帧不 seek 到精确末尾（移动浏览器 seeked 可能不触发）
         const t=Math.min(i*(v.duration/total), v.duration-0.05);
         let fired=false, timer=null;
@@ -524,6 +529,16 @@ function analyzeFrames(){
           let poses=[];
           try{
             octx.drawImage(v,0,0,oc.width,oc.height);
+            // 每 10 帧抽样一次画面亮度，用于区分"黑帧(编码问题)"与"检测不到人"
+            if(i%10===0){
+              try{
+                const cx=Math.max(0,(oc.width>>1)-48), cy=Math.max(0,(oc.height>>1)-48);
+                const d=octx.getImageData(cx,cy,96,96).data;
+                let sum=0,n=d.length>>2;
+                for(let k=0;k<d.length;k+=4) sum+=(d[k]+d[k+1]+d[k+2])/3;
+                sampled++; if(sum/n<10) black++;
+              }catch(e){}
+            }
             poses=(state.landmarker.detectForVideo(oc,performance.now()).poseLandmarks)||[];
           }catch(e){ errs++; lastErr=e.message; }
           let chosen=null;
@@ -539,7 +554,7 @@ function analyzeFrames(){
             if(/activeTexture|WebGL|webgl/i.test(lastErr)&&errs>=5&&state.useGPU){
               // GPU 推理持续 WebGL 报错：自动重建 CPU 并从头重采（真机兼容性兜底）
               $('ptext').textContent='检测到 WebGL 异常，自动切换 CPU 模式重试…';
-              rebuildAsCPU().then(()=>{ i=0; errs=0; lastErr=''; out.lms=[]; out.ts=[]; step(); }).catch(()=>res2(out));
+              rebuildAsCPU().then(()=>{ i=0; errs=0; lastErr=''; out.lms=[]; out.ts=[]; black=0; sampled=0; step(); }).catch(()=>res2({lms:out.lms,ts:out.ts,diag:{black,sampled}}));
             }else if(/activeTexture|WebGL|webgl/i.test(lastErr)){
               $('ptext').textContent='检测异常：当前浏览器无 GPU/WebGL 硬件加速，无法运行姿态分析。请更换 Chrome/Edge/Safari 或开启硬件加速后重试。';
             }else{
@@ -710,13 +725,29 @@ $('go').addEventListener('click',async ()=>{
   const ok=await initLandmarker();
   if(!ok){ state.analyzing=false; $('go').disabled=false; $('go').textContent='开始分析'; return; }
   try{
-    const {lms,ts}=await analyzeFrames();
+    const {lms,ts,diag}=await analyzeFrames();
     state.lms=lms; state.ts=ts;
-    const validCnt=lms.filter(Boolean).length;
+    let validCnt=lms.filter(Boolean).length;
     if(validCnt<4){
-      showErr('未能从视频中检测到人体姿态（'+validCnt+' 帧）。可能原因：① 视频编码不被浏览器支持（HEVC/H.265 请转 H.264）；② 画面中无人或人物过小；③ 光线过暗。');
-      state.analyzing=false; $('go').disabled=false; $('go').textContent='开始分析';
-      $('prog').querySelector('i').style.width='0%'; return;
+      // 自动重试：重建引擎（GPU→CPU）+ 强制 canvas 诊断重采一次
+      let diag2=diag;
+      try{
+        if(state.useGPU) await rebuildAsCPU();
+        const retry=await analyzeFrames(true);
+        state.lms=retry.lms; state.ts=retry.ts;
+        diag2=retry.diag;
+        validCnt=state.lms.filter(Boolean).length;
+      }catch(e){}
+      if(validCnt<4){
+        const blackRatio=(diag2&&diag2.sampled)?diag2.black/diag2.sampled:0;
+        if(blackRatio>0.5){
+          showErr('视频画面读取为黑帧（'+validCnt+' 帧有效）：多为 iPhone 拍摄的 HEVC/H.265 编码，浏览器无法为 AI 引擎取到画面。请将视频转为 H.264 的 .mp4（剪映/格式工厂/iOS「设置→相机→格式→兼容性最佳」）后再上传。');
+        }else{
+          showErr('仍未检测到人体（'+validCnt+' 帧有效）。请确认：① 全身入镜（脚踝到头顶完整）；② 侧面机位；③ 光线充足；④ 只含一次完整动作。若画面正常仍失败，请转 H.264 后重试。');
+        }
+        state.analyzing=false; $('go').disabled=false; $('go').textContent='开始分析';
+        $('prog').querySelector('i').style.width='0%'; return;
+      }
     }
     const fps=lms.length/Math.max(.1,$('v').duration);
     const r=computePipeline(lms,fps,$('v').duration);
