@@ -411,17 +411,19 @@ async function initLandmarker(){
   $('ptext').textContent='正在加载姿态模型（首次约 20-40 秒，之后秒开）…';
   $('prog').style.display='block';
   try{
-    const fileset=await FilesetResolver.forVisionTasks('https://fastly.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+    const fileset=await FilesetResolver.forVisionTasks(ML_WASM);
     const modelAbs=new URL('models/pose_landmarker_full.task',location.href).href;
-    $('ptext').textContent='正在加载姿态模型（CPU 模式，首次约 20-40 秒）…';
+    const useGPU=webglOk(); state.useGPU=useGPU;
+    if(!useGPU) $('ptext').textContent='正在加载姿态模型（CPU 模式，首次约 20-40 秒）…';
     try{
       state.landmarker=await PoseLandmarker.createFromOptions(fileset,{
-        baseOptions:{modelAssetPath:modelAbs,delegate:'CPU'},
+        baseOptions:{modelAssetPath:modelAbs,delegate:useGPU?'GPU':'CPU'},
         runningMode:'VIDEO',numPoses:2,
         minPoseDetectionConfidence:.4,minTrackingConfidence:.4
       });
     }catch(e){
-      // 同源模型不可用（本地 file:// 打开等）时回退到 jsDelivr 托管副本
+      // GPU 创建失败或同源模型不可用时回退：CPU delegate + jsDelivr 托管副本
+      state.useGPU=false;
       state.landmarker=await PoseLandmarker.createFromOptions(fileset,{
         baseOptions:{modelAssetPath:'https://cdn.jsdelivr.net/gh/mayuehappy/ai_weightlift_score@main/demo/models/pose_landmarker_full.task',delegate:'CPU'},
         runningMode:'VIDEO',numPoses:2,
@@ -436,6 +438,20 @@ async function initLandmarker(){
     return false;
   }
 }
+const ML_WASM='https://fastly.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
+const ML_MODEL='https://cdn.jsdelivr.net/gh/mayuehappy/ai_weightlift_score@main/demo/models/pose_landmarker_full.task';
+async function rebuildAsCPU(){
+  // GPU 推理持续报 WebGL 错误时：重建为 CPU delegate（真机兼容性兜底）
+  if(state.landmarker) try{ state.landmarker.close(); }catch(e){}
+  const fileset=await FilesetResolver.forVisionTasks(ML_WASM);
+  state.landmarker=await PoseLandmarker.createFromOptions(fileset,{
+    baseOptions:{modelAssetPath:ML_MODEL,delegate:'CPU'},
+    runningMode:'VIDEO',numPoses:2,
+    minPoseDetectionConfidence:.4,minTrackingConfidence:.4
+  });
+  state.useGPU=false;
+  return true;
+}
 function webglOk(){
   try{ const c=document.createElement('canvas'); return !!(c.getContext('webgl2')||c.getContext('webgl')); }
   catch(e){ return false; }
@@ -447,11 +463,16 @@ function analyzeFrames(){
     v.pause();
     try{ v.currentTime=0; }catch(e){}
     let prevHip=null,first=true;
+    // 移动 Safari 等无 requestVideoFrameCallback 时直接走逐帧 seek 采集
+    if(!('requestVideoFrameCallback' in v)){ seekCollect().then(resolve).catch(reject); return; }
+    let lastT=-1, stallTimer=null, finished=false;
+    const finish=()=>{ if(finished) return; finished=true; v.pause(); clearInterval(stallTimer); resolve({lms,ts}); };
     const tick=async ()=>{
-      if(!state.landmarker){ reject(new Error('模型未就绪')); return; }
+      if(finished) return;
+      if(!state.landmarker){ finish(); return; }
       let poses=[];
       try{ poses=(state.landmarker.detectForVideo(v,performance.now()).poseLandmarks)||[]; }
-      catch(e){ $('ptext').textContent='单帧检测异常:'+e.message; }
+      catch(e){ if(/activeTexture|WebGL|webgl/i.test(e.message)) finish(); else $('ptext').textContent='单帧检测异常:'+e.message; }
       let chosen=null;
       if(poses.length===1) chosen=poses[0];
       else if(poses.length>1){
@@ -466,14 +487,21 @@ function analyzeFrames(){
       $('ptext').textContent=`分析中 ${(pct*100).toFixed(0)}% · ${lms.length} 帧 · 姿态 ${lms.filter(Boolean).length} 帧`;
       if(v.ended||(v.duration&&v.currentTime>=v.duration-.08)){ finish(); return; }
       if(v.paused&&!v.ended){ finish(); return; }
-      v.requestVideoFrameCallback(tick);
+      if(v.currentTime>lastT) lastT=v.currentTime;
+      try{ v.requestVideoFrameCallback(tick); }catch(e){ finish(); }
     };
-    const finish=()=>{ v.pause(); resolve({lms,ts}); };
     v.addEventListener('ended',finish,{once:true});
     v.addEventListener('pause',finish,{once:true});
-    v.requestVideoFrameCallback(tick);
-    v.play().then(()=>{}).catch(e=>{ $('ptext').textContent='自动播放被拦截（'+e.message+'），改用逐帧采集'; seekCollect().then(resolve).catch(reject); });
-    setTimeout(()=>{ if(v.paused&&!v.ended){ /* 播放未启动则走 seek 采集 */ seekCollect().then(resolve).catch(reject); } },2500);
+    try{ v.requestVideoFrameCallback(tick); }catch(e){ seekCollect().then(resolve).catch(reject); return; }
+    v.play().then(()=>{}).catch(e=>{ $('ptext').textContent='自动播放被拦截，改用逐帧采集'; seekCollect().then(resolve).catch(reject); });
+    // 兜底：播放采集连续无推进（rVFC 静默失效）则切换 seek 采集
+    stallTimer=setInterval(()=>{
+      if(finished) return;
+      if(v.currentTime>lastT){ lastT=v.currentTime; return; }
+      $('ptext').textContent='播放采集无响应，改用逐帧采集';
+      clearInterval(stallTimer); v.removeEventListener('ended',finish); v.removeEventListener('pause',finish);
+      seekCollect().then(resolve).catch(reject);
+    },3000);
   });
   function seekCollect(){
     const v=$('v');
@@ -487,8 +515,11 @@ function analyzeFrames(){
       let i=0,errs=0,lastErr='';
       const step=()=>{
         if(i>=total){ v.pause(); res2(out); return; }
-        const t=i*(v.duration/total);
+        // 最后一帧不 seek 到精确末尾（移动浏览器 seeked 可能不触发）
+        const t=Math.min(i*(v.duration/total), v.duration-0.05);
+        let fired=false, timer=null;
         const h=()=>{
+          if(fired) return; fired=true; clearTimeout(timer);
           v.removeEventListener('seeked',h);
           let poses=[];
           try{
@@ -505,7 +536,11 @@ function analyzeFrames(){
           out.ts.push(v.currentTime); out.lms.push(chosen);
           $('prog').querySelector('i').style.width=((i+1)/total*100)+'%';
           if(errs){
-            if(/activeTexture|WebGL|webgl/i.test(lastErr)){
+            if(/activeTexture|WebGL|webgl/i.test(lastErr)&&errs>=5&&state.useGPU){
+              // GPU 推理持续 WebGL 报错：自动重建 CPU 并从头重采（真机兼容性兜底）
+              $('ptext').textContent='检测到 WebGL 异常，自动切换 CPU 模式重试…';
+              rebuildAsCPU().then(()=>{ i=0; errs=0; lastErr=''; out.lms=[]; out.ts=[]; step(); }).catch(()=>res2(out));
+            }else if(/activeTexture|WebGL|webgl/i.test(lastErr)){
               $('ptext').textContent='检测异常：当前浏览器无 GPU/WebGL 硬件加速，无法运行姿态分析。请更换 Chrome/Edge/Safari 或开启硬件加速后重试。';
             }else{
               $('ptext').textContent='检测异常: '+lastErr;
@@ -515,6 +550,8 @@ function analyzeFrames(){
           i++; step();
         };
         v.addEventListener('seeked',h);
+        // 兜底：800ms 内 seeked 未触发（移动浏览器 seek 到末尾不触发）则直接继续
+        timer=setTimeout(h,800);
         v.currentTime=t;
       };
       step();
