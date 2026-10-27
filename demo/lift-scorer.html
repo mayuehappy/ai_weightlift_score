@@ -92,7 +92,7 @@ footer{color:var(--sub);font-size:12px;line-height:1.7;text-align:center;margin-
 <div class="card hidden" id="stepAna">
   <h2>② 预览与分析</h2>
   <div class="vbox">
-    <video id="v" controls playsinline></video>
+    <video id="v" controls playsinline muted></video>
     <canvas id="ov" width="540" height="960"></canvas>
   </div>
   <div style="display:flex;gap:10px;margin-top:12px;align-items:center;flex-wrap:wrap;">
@@ -742,8 +742,8 @@ async function runAnalysis(){
       }catch(e){}
       if(validCnt<4){
         const blackRatio=(diag2&&diag2.sampled)?diag2.black/diag2.sampled:0;
-        // ① 画面正常但 detectForVideo 取不到帧（iOS 等系统硬解 HEVC 场景）：canvas 抽帧 + IMAGE 模式，0 下载 0 等待
-        if(!state.triedCanvas&&blackRatio<=0.5&&state.curFile){
+        // ① 备用画面路径：无条件优先尝试（0 下载 0 等待）；iOS 等系统硬解 HEVC 时 detectForVideo 取帧失败，此路径播放中截帧 + IMAGE 检测
+        if(!state.triedCanvas&&state.curFile){
           $('go').disabled=true; $('go').textContent='分析中…';
           showErr('正在用备用画面路径重新分析（画面可显示即无需下载引擎，稍等）…');
           try{
@@ -867,22 +867,51 @@ function seekOnce(v,t){
     try{ v.currentTime=t; }catch(e){ if(!fired){ fired=true; res(); } }
   });
 }
-/* 备用画面路径：canvas 抽帧（iOS 等系统可解码但 detectForVideo 失败的编码）+ IMAGE 模式检测，无需下载引擎 */
+/* 备用画面路径：播放中截帧（iOS 关键：pause+seek 后 drawImage 是黑帧，必须保持播放解码激活）+ IMAGE 模式检测，无需下载引擎 */
 async function analyzeCanvasFrames(){
-  const v=$('v'); v.pause();
-  const total=Math.max(24,Math.min(120,Math.round(v.duration*12)));
-  const fps=total/Math.max(.1,v.duration);
+  const v=$('v');
+  v.muted=true;
+  const dur=v.duration||10;
+  const total=Math.max(24,Math.min(120,Math.round(dur*12)));
+  const fps=total/Math.max(.1,dur);
   const imgs=[];
-  for(let i=0;i<total;i++){
-    const t=Math.min(i*(v.duration/total),v.duration-0.05);
-    await seekOnce(v,t);
-    const c=document.createElement('canvas');
-    c.width=v.videoWidth||720; c.height=v.videoHeight||1280;
-    try{ c.getContext('2d',{willReadFrequently:true}).drawImage(v,0,0,c.width,c.height); }catch(e){}
-    imgs.push(c);
-    $('prog').querySelector('i').style.width=(Math.min(1,(i+1)/total)*100)+'%';
-    $('ptext').textContent=`画面抽取 ${i+1}/${total}…`;
-  }
+  try{ v.currentTime=0; }catch(e){}
+  await new Promise(res=>{
+    let collected=0,lastN=-1,finished=false;
+    const finish=()=>{ if(finished)return; finished=true; try{v.pause();}catch(e){} res(); };
+    const push=(n)=>{
+      lastN=n;
+      const c=document.createElement('canvas');
+      c.width=v.videoWidth||720; c.height=v.videoHeight||1280;
+      try{ c.getContext('2d',{willReadFrequently:true}).drawImage(v,0,0,c.width,c.height); }catch(e){}
+      imgs.push(c); collected++;
+      $('prog').querySelector('i').style.width=(Math.min(1,collected/total)*100)+'%';
+      $('ptext').textContent=`画面抽取 ${collected}/${total}…`;
+    };
+    const grab=(now,meta)=>{
+      const n=(meta&&typeof meta.mediaTime==='number')?Math.min(total-1,Math.floor(meta.mediaTime*fps)):collected;
+      if(n>lastN) push(n);
+      if(collected>=total||v.ended){ finish(); return; }
+      try{ v.requestVideoFrameCallback(grab); }catch(e){ finish(); }
+    };
+    try{ if(v.paused) v.play(); }catch(e){}
+    if('requestVideoFrameCallback' in v){
+      try{ v.requestVideoFrameCallback(grab); }catch(e){ finish(); }
+    }else{
+      // 旧浏览器：保持播放中 seek + drawImage（不 pause）
+      let i=0;
+      const step=async()=>{
+        if(i>=total||v.ended){ finish(); return; }
+        const t=Math.min(i*(dur/total),dur-0.05);
+        await seekOnce(v,t);
+        push(i); i++;
+        step();
+      };
+      step();
+    }
+    // 兜底：播放推进失败（rVFC 静默失效）时按现有进度继续，避免死等
+    setTimeout(()=>{ if(!finished&&imgs.length>=Math.min(12,Math.round(total/2))) finish(); },Math.min(20000,dur*1000+8000));
+  });
   const lms=[],ts=[];
   let prevHip=null,lm=null;
   try{ lm=await initImageLandmarker(); }catch(e){}
